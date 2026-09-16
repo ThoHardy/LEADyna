@@ -2,7 +2,8 @@ from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
-from . import fitting_tools, model
+from . import datasets, fitting_tools, model
+from .datasets import LatentSeries
 
 try:
     __version__ = _pkg_version("leadyna")
@@ -33,8 +34,10 @@ def __getattr__(name):
 
 
 __all__ = [
+    "LatentSeries",
     "STG",
     "colormap",
+    "datasets",
     "dataprocess",
     "fitting_tools",
     "model",

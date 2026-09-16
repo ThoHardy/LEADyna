@@ -6,6 +6,8 @@ from joblib import Parallel, delayed
 from filterpy.kalman import UnscentedKalmanFilter as UKF, JulierSigmaPoints
 import json
 
+from .datasets import LatentSeries
+
 # =============================================================================
 # UKF Engine (The Core Logic)
 # =============================================================================
@@ -169,8 +171,27 @@ class LEAD_abstract(ABC):
         pass
 
     @abstractmethod
-    def loglikelihood(self, state_series: dict, input_series: dict) -> float:
-        pass
+    def _make_fx(self, category: int):
+        """Return a fast transition callable ``fx(x, dt, u)`` for ``category``."""
+        ...
+
+    def loglikelihood(self, state_series, input_series=None,
+                      n_jobs: int = 8, batch_size: int = 20) -> float:
+        """Total UKF log-likelihood of the data under this model.
+
+        Accepts either a :class:`~leadyna.datasets.LatentSeries` (whose ``dt``
+        is adopted) or the legacy ``(state_series, input_series)`` dict pair.
+        """
+        state_series, input_series = self._resolve_series(state_series, input_series)
+        return compute_ukf_loglikelihood(
+            state_series, input_series,
+            dt=self.dt,
+            process_noise_scalar=self.process_noise,
+            measure_noise_scalar=self.measure_noise,
+            transition_function_factory=self._make_fx,
+            n_jobs=n_jobs,
+            batch_size=batch_size,
+        )
 
     # --- Shared Physics "Core" ---
 
@@ -246,11 +267,33 @@ class LEAD_abstract(ABC):
             params = json.load(f)
         self.set_params(params)
     
+    def _resolve_series(self, state_series, input_series):
+        """Accept a LatentSeries or a ``(state_series, input_series)`` dict pair.
+
+        A LatentSeries routes through the contract: its ``dt`` is adopted and its
+        arrays returned. The legacy dict-pair path is unchanged (``dt`` untouched),
+        so existing code and numerical results are preserved exactly.
+        """
+        if isinstance(state_series, LatentSeries):
+            if input_series is not None:
+                raise TypeError(
+                    "Pass a LatentSeries alone, or state_series and input_series "
+                    "as separate dicts — not both."
+                )
+            self.dt = state_series.dt
+            return state_series.states, state_series.inputs
+        if input_series is None:
+            raise TypeError(
+                "input_series is required when state_series is a plain dict; "
+                "pass a LatentSeries to route through the contract instead."
+            )
+        return state_series, input_series
+
     # --- Fitting Tools ---
     
-    def fit(self, state_series: dict[int, np.ndarray], input_series: dict[int, np.ndarray], 
-            init_params: list, bounds: list, fixed_params: list = [], 
-            feedback: bool = False):
+    def fit(self, state_series, input_series=None,
+            init_params=None, bounds=None, fixed_params=None,
+            n_jobs=None, batch_size=None, feedback: bool = False):
         """
         Maximize likelihood to fit the model parameters.
         
@@ -263,6 +306,17 @@ class LEAD_abstract(ABC):
             feedback: Whether to print optimization feedback
         """
         from scipy.optimize import minimize
+
+        state_series, input_series = self._resolve_series(state_series, input_series)
+        if init_params is None or bounds is None:
+            raise ValueError("fit() requires init_params and bounds.")
+        if fixed_params is None:
+            fixed_params = []
+        ll_kw = {}
+        if n_jobs is not None:
+            ll_kw['n_jobs'] = n_jobs
+        if batch_size is not None:
+            ll_kw['batch_size'] = batch_size
         
         # Identify which parameters to optimize
         free_indices = [i for i, name in enumerate(self._param_names) if name not in fixed_params]
@@ -275,11 +329,11 @@ class LEAD_abstract(ABC):
             for i, idx in enumerate(free_indices):
                 full_params[idx] = p_free[i]
             self.set_params_from_list(full_params)
-            return -self.loglikelihood(state_series, input_series)
+            return -self.loglikelihood(state_series, input_series, **ll_kw)
         
         init_free = [init_params[i] for i in free_indices]
         bounds_free = [bounds[i] for i in free_indices]
-        result = minimize(to_minimize, init_free, bounds=bounds_free)
+        result = minimize(to_minimize, init_free, bounds=bounds_free, method="L-BFGS-B")
         
         # Apply the fitted parameters
         full_params = init_params.copy()
@@ -326,17 +380,9 @@ class StratifiedLinear(LEAD_abstract):
         # Return function with signature (x, dt, u)
         return lambda x, dt_val, u: decay * x + input_gain * u
 
-    def loglikelihood(self, state_series, input_series):
-        return compute_ukf_loglikelihood(
-            state_series, input_series,
-            dt=self.dt,
-            process_noise_scalar=self.process_noise,
-            measure_noise_scalar=self.measure_noise,
-            transition_function_factory=self._make_fx
-        )
-
-    def loglikelihood_kalman(self, state_series: dict, input_series: dict) -> float:
+    def loglikelihood_kalman(self, state_series, input_series=None) -> float:
         """Exact Kalman Filter implementation (Analytical Solution for verify)."""
+        state_series, input_series = self._resolve_series(state_series, input_series)
         total_ll = 0.0
         A = 1 - self.dt / self.tau
         Q = self.process_noise**2 * self.dt
@@ -401,15 +447,6 @@ class NonLinear1(LEAD_abstract):
             return x + dxdt * dt
         return fx
 
-    def loglikelihood(self, state_series, input_series):
-        return compute_ukf_loglikelihood(
-            state_series, input_series,
-            dt=self.dt,
-            process_noise_scalar=self.process_noise,
-            measure_noise_scalar=self.measure_noise,
-            transition_function_factory=self._make_fx
-        )
-
 
 class StratifiedNonLinear1(LEAD_abstract):
     """
@@ -443,15 +480,6 @@ class StratifiedNonLinear1(LEAD_abstract):
             return x + dxdt * dt
         return fx
 
-    def loglikelihood(self, state_series, input_series):
-        return compute_ukf_loglikelihood(
-            state_series, input_series,
-            dt=self.dt,
-            process_noise_scalar=self.process_noise,
-            measure_noise_scalar=self.measure_noise,
-            transition_function_factory=self._make_fx
-        )
-
 
 class NonLinear2(LEAD_abstract):
     """
@@ -484,15 +512,6 @@ class NonLinear2(LEAD_abstract):
             dxdt = -x/tau + iw*u + nl
             return x + dxdt * dt
         return fx
-
-    def loglikelihood(self, state_series, input_series):
-        return compute_ukf_loglikelihood(
-            state_series, input_series,
-            dt=self.dt,
-            process_noise_scalar=self.process_noise,
-            measure_noise_scalar=self.measure_noise,
-            transition_function_factory=self._make_fx
-        )
 
 
 class StratifiedNonLinear2(LEAD_abstract):
@@ -530,15 +549,6 @@ class StratifiedNonLinear2(LEAD_abstract):
             return x + dxdt * dt
         return fx
 
-    def loglikelihood(self, state_series, input_series):
-        return compute_ukf_loglikelihood(
-            state_series, input_series,
-            dt=self.dt,
-            process_noise_scalar=self.process_noise,
-            measure_noise_scalar=self.measure_noise,
-            transition_function_factory=self._make_fx
-        )
-
 
 class GainModulation(LEAD_abstract):
     """
@@ -570,15 +580,6 @@ class GainModulation(LEAD_abstract):
             dxdt = -x/tau + iw*u + nl
             return x + dxdt * dt
         return fx
-
-    def loglikelihood(self, state_series, input_series):
-        return compute_ukf_loglikelihood(
-            state_series, input_series,
-            dt=self.dt,
-            process_noise_scalar=self.process_noise,
-            measure_noise_scalar=self.measure_noise,
-            transition_function_factory=self._make_fx
-        )
 
 
 class StratifiedGainModulation(LEAD_abstract):
@@ -634,12 +635,3 @@ class StratifiedGainModulation(LEAD_abstract):
             
             return x + dxdt * dt
         return fx
-
-    def loglikelihood(self, state_series, input_series):
-        return compute_ukf_loglikelihood(
-            state_series, input_series,
-            dt=self.dt,
-            process_noise_scalar=self.process_noise,
-            measure_noise_scalar=self.measure_noise,
-            transition_function_factory=self._make_fx
-        )

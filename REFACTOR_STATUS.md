@@ -1,6 +1,6 @@
 # LEADyna refactor — status & resume guide
 
-*As of 2026-09-16. Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
+*As of 2026-09-16 (Phase 2 complete). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
 
 ## What this is
 
@@ -13,6 +13,7 @@ Turning the prototype `ThoHardy/LEAD` into **LEADyna** — a pip-installable, mo
 - **Foundation first**: clean installable package, honest docs, bug fixes, tests, one example — before multi-modality + analysis-suite migration.
 - **Colleagues now, PyPI-ready later.**
 - **License: MIT.** `.gitignore`: GitHub "Python" template.
+- **`dt` is explicit but defaults to index units (`dt=1.0`).** The core no longer *silently* assumes `dt=1`; `LatentSeries` carries it. Default `1.0` reproduces historical numerics, so existing fits and the leadyna-vs-lead equivalence are preserved; physical-seconds is an opt-in that rescales `tau`/noise.
 - **Import name stays `leadyna`, kept parallel to the old `lead`** so the same notebooks can be run under both and diffed for equivalence.
 
 ## Done
@@ -24,6 +25,12 @@ Turning the prototype `ThoHardy/LEAD` into **LEADyna** — a pip-installable, mo
   - `__init__.py`: frontends load **lazily**, so the core imports with only its four core deps (an fMRI colleague never needs MNE). The one deliberate packaging change vs `lead`; changes no numbers.
   - `README.md`, `py.typed`, `tests/`, `examples/` placeholders.
   - **Verified**: builds; core imports without mne/pandas/seaborn; UKF log-likelihood == exact Kalman log-likelihood to 1.7e-13.
+- [x] **Repo hygiene**: added `.gitattributes` (`eol=lf`) and normalized CRLF churn in `model.py` / `fitting_tools.py` / `.gitignore` / `LICENSE`, so line endings stop polluting diffs.
+- [x] **First real tests** in `tests/` (run with `pytest`):
+  - `test_likelihood.py`: UKF log-likelihood == exact analytic Kalman (linear model), and `LatentSeries` routing reproduces the dict-pair result bit-for-bit.
+  - `test_contract.py`: `LatentSeries` validation (bad shapes, missing/2nd-dim<2, mismatched categories, non-finite, bad `dt` type/value, stray labels) and the model's route-through errors.
+- [x] **Phase 2 — `LatentSeries` contract**: new `src/leadyna/datasets.py` with a validated `LatentSeries` dataclass (states / inputs / `dt` / `category_labels` / `metadata`). `fit`, `loglikelihood` and `loglikelihood_kalman` now accept **either** a `LatentSeries` (its `dt` is adopted) **or** the legacy dict pair — fully backward-compatible. The 7 byte-identical per-model `loglikelihood` methods were consolidated onto the base class (`_make_fx` is now the abstract hook); `fit` names `method="L-BFGS-B"` explicitly (matching the README) and no longer uses a mutable default arg. Exported `LatentSeries` from the top-level package.
+- [x] **Fitting ergonomics**: `fit()` (and `loglikelihood`) now accept `n_jobs` / `batch_size`, forwarded to the UKF engine (default unchanged at `n_jobs=8`). Pass `n_jobs=1` for small/local fits — measured ~13x faster on 6 trials (0.7s vs 9.5s) with identical recovery, and no loky worker spawn. A `test_fit.py` parameter-recovery + route-equivalence test covers this.
 
 ## Environment (important lesson)
 
@@ -47,8 +54,8 @@ To repair base if numpy got bumped there: `python -m pip install "numpy==1.26.4"
 ## Next steps (detail in `ROADMAP.md`)
 
 - [ ] Confirm a SOUNDMODEL notebook reproduces under `import leadyna as lead` (equivalence check).
-- [ ] Turn the UKF-vs-Kalman check into the first real test in `tests/`; add GitHub Actions CI.
-- [ ] **Phase 2 — `LatentSeries` contract**: a small validated container (states / inputs / `dt` / category labels) as the core↔frontend boundary; make `dt` explicit end-to-end.
+- [x] UKF-vs-Kalman check is now the first real test in `tests/`. **Still TODO:** add GitHub Actions CI (Phase 5).
+- [x] **Phase 2 — `LatentSeries` contract**: done (see **Done** above).
 - [ ] **Phase 3 — de-EEG the core**: make `n_categories` a parameter (drop the hard-coded `w0..w6` / `range(7)`); move 64-channel / decimate / metadata assumptions into `frontends/eeg_mne.py`; rename classes for clarity while still `0.x`.
 - [ ] **Phase 4 — dynamics**: expose `model.drift()` / `drift_deriv()`; migrate bifurcation-probability + metastability score from SOUNDMODEL into `lead/dynamics.py`.
 - [ ] **Phase 5 — compare**: migrate CV / Bayesian model selection / OVL-STD-Wasserstein into `lead/compare.py`.
