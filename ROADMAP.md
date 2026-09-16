@@ -197,7 +197,9 @@ Second pass (later): `compare.py` migration, additional frontends (iEEG, fMRI), 
 
 ---
 
-## 8. Open design questions worth deciding before Phase 3
+## 8. Design questions decided before Phase 3 (2026-09-16)
+
+**Resolved:** (1) keep discrete `category`, free only its cardinality; (2) keep a designated baseline category but expose it as `baseline_category=0`; (3) rename to public `*LEAD` names with deprecated aliases. Original framing kept below for the record.
 
 These are the load-bearing choices where I'd want your call rather than guessing:
 

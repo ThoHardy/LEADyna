@@ -54,7 +54,7 @@ downstream stack (fit, likelihood) then works unchanged.
 ```python
 import numpy as np
 from leadyna import LatentSeries
-from leadyna.model import StratifiedLinear
+from leadyna import LinearLEAD
 
 # states / inputs: dict[category -> (n_trials, n_timesteps)]
 states = {0: np.random.randn(20, 50), 1: np.random.randn(20, 50)}
@@ -63,12 +63,13 @@ inputs = {0: np.zeros((20, 50)),       1: np.ones((20, 50))}
 data = LatentSeries(states, inputs, dt=1.0,           # dt=1.0 -> index units
                     category_labels={0: "rest", 1: "stim"})
 
-model = StratifiedLinear(tau=10.0, process_noise=0.2, measure_noise=0.2, w1=0.5)
+# n_categories is free (default 7); here the data has 2 categories.
+model = LinearLEAD(tau=10.0, process_noise=0.2, measure_noise=0.2,
+                   n_categories=2, w1=0.5)
 model.fit(data,
-          init_params=[10, 0.2, 0.2] + [0] * 7,
-          bounds=[(1, 25), (0.01, 1), (0.01, 1)] + [(0, 1)] * 7,
-          fixed_params=["tau", "process_noise", "measure_noise"]
-                       + [f"w{k}" for k in range(7) if k != 1])
+          init_params=[10, 0.2, 0.2] + [0] * 2,
+          bounds=[(1, 25), (0.01, 1), (0.01, 1)] + [(0, 1)] * 2,
+          fixed_params=["tau", "process_noise", "measure_noise", "w0"])
 print("fitted w1:", model.w1, "| log-likelihood:", model.loglikelihood(data))
 ```
 

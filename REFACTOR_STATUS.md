@@ -1,6 +1,6 @@
 # LEADyna refactor — status & resume guide
 
-*As of 2026-09-16 (Phase 2 complete). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
+*As of 2026-09-16 (Phase 3 complete). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
 
 ## What this is
 
@@ -32,6 +32,13 @@ Turning the prototype `ThoHardy/LEAD` into **LEADyna** — a pip-installable, mo
 - [x] **Phase 2 — `LatentSeries` contract**: new `src/leadyna/datasets.py` with a validated `LatentSeries` dataclass (states / inputs / `dt` / `category_labels` / `metadata`). `fit`, `loglikelihood` and `loglikelihood_kalman` now accept **either** a `LatentSeries` (its `dt` is adopted) **or** the legacy dict pair — fully backward-compatible. The 7 byte-identical per-model `loglikelihood` methods were consolidated onto the base class (`_make_fx` is now the abstract hook); `fit` names `method="L-BFGS-B"` explicitly (matching the README) and no longer uses a mutable default arg. Exported `LatentSeries` from the top-level package.
 - [x] **Fitting ergonomics**: `fit()` (and `loglikelihood`) now accept `n_jobs` / `batch_size`, forwarded to the UKF engine (default unchanged at `n_jobs=8`). Pass `n_jobs=1` for small/local fits — measured ~13x faster on 6 trials (0.7s vs 9.5s) with identical recovery, and no loky worker spawn. A `test_fit.py` parameter-recovery + route-equivalence test covers this.
 
+- [x] **Phase 3 — de-EEG the core**: the modality-agnostic core no longer hard-codes 7 categories.
+  - `n_categories` is now a constructor argument on every stratified model; weights `w0..w{n-1}` (and `g0..g{n-1}` for gain modulation) are built programmatically via `BaseLEADModel._register_stratified`, which also **validates** supplied weights and rejects stray/typo keys. Default `n_categories=7` reproduces the original SNR design **bit-for-bit** (guarded by a test).
+  - `baseline_category` (default 0) is now an explicit, overridable attribute instead of a silent "category 0 is resting" assumption. `n_categories` / `baseline_category` are keyword-only, so a stray positional weight fails loudly rather than silently landing in `w0`.
+  - **Public class names** (clean while `0.x`): `LEAD_abstract`→`BaseLEADModel`, `StratifiedLinear`→`LinearLEAD`, `NonLinear1`→`SigmoidFeedbackLEAD`, `StratifiedNonLinear1`→`StratifiedSigmoidFeedbackLEAD`, `NonLinear2`→`AffineFeedbackLEAD`, `StratifiedNonLinear2`→`StratifiedAffineFeedbackLEAD`, `GainModulation`→`GainModulationLEAD`, `StratifiedGainModulation`→`StratifiedGainModulationLEAD`. The old names remain as **deprecated aliases** (a PEP 562 `model.__getattr__` resolves them to the new class and emits a `DeprecationWarning`), so existing SOUNDMODEL notebooks keep running. The public classes are also now importable straight from the top level (`leadyna.LinearLEAD`).
+  - **EEG assumptions moved out of the core**: `dataprocess.py` became the `frontends/` subpackage (`leadyna.frontends.eeg_mne`); the hard-coded 64 channels are now inferred from the data and `decimate(5)` is a `decimate_factor` argument. `leadyna.dataprocess` stays as a deprecated shim. The UKF engine and every model's physics are untouched.
+  - **Tests: 34 pass** (was 18). New `test_categories.py` (free `n_categories`: 7≡explicit-7, UKF≡Kalman on 3 categories, LatentSeries round-trip on 4, weight recovery, baseline exposure, stray-weight rejection) and `test_aliases.py` (every deprecated alias warns and resolves). Existing tests migrated to the new names.
+
 ## Environment (important lesson)
 
 Install into an **isolated environment**, never the conda `base` env. Unpinned `numpy>=1.24` let pip pull numpy 2.x into base and break other tools (gensim, numba need numpy < 2). The fix is isolation, not upper-capping deps — libraries declare lower bounds only. `leadyna` itself runs fine under numpy 2.x.
@@ -56,17 +63,22 @@ To repair base if numpy got bumped there: `python -m pip install "numpy==1.26.4"
 - [ ] Confirm a SOUNDMODEL notebook reproduces under `import leadyna as lead` (equivalence check).
 - [x] UKF-vs-Kalman check is now the first real test in `tests/`. **Still TODO:** add GitHub Actions CI (Phase 5).
 - [x] **Phase 2 — `LatentSeries` contract**: done (see **Done** above).
-- [ ] **Phase 3 — de-EEG the core**: make `n_categories` a parameter (drop the hard-coded `w0..w6` / `range(7)`); move 64-channel / decimate / metadata assumptions into `frontends/eeg_mne.py`; rename classes for clarity while still `0.x`.
+- [x] **Phase 3 — de-EEG the core**: done (see **Done** above) — free `n_categories`, explicit `baseline_category`, public `*LEAD` names + deprecated aliases, EEG assumptions moved to `frontends/eeg_mne.py`.
 - [ ] **Phase 4 — dynamics**: expose `model.drift()` / `drift_deriv()`; migrate bifurcation-probability + metastability score from SOUNDMODEL into `lead/dynamics.py`.
 - [ ] **Phase 5 — compare**: migrate CV / Bayesian model selection / OVL-STD-Wasserstein into `lead/compare.py`.
 - [ ] **Phase 6 — one worked example** notebook (EEG `.fif` → fit → compare → bifurcation → plot).
 
-## Open questions still to decide
+## Decisions taken in Phase 3
 
-- Core abstraction: keep discrete `category`, or take a continuous input `I(t)` and let frontends bin?
-- Does the core need a designated "baseline/resting" category, or should that be a frontend flag?
-- Public class names (`LEAD_abstract` → `BaseLEADModel`, `Stratified*` → clearer names?).
-- Author metadata in `pyproject.toml`: add email / ORCID / lab as second copyright holder?
+- **Weights**: kept per-category attributes `w0..w{n-1}` (dynamically generated from `n_categories`) rather than a vector, so notebooks that pass `w1=...` or read `.w3` keep working unchanged.
+- **Baseline**: kept the designated baseline category, but made it explicit and overridable (`baseline_category=0`).
+- **Class names**: renamed to public `*LEAD` names, with the old names kept as deprecated aliases (non-breaking).
+- **Category vs continuous input**: kept discrete `category`, only freed its cardinality (per the foundation-first call). Continuous `I(t)` deferred until a real dataset demands it.
+
+## Still open (later phases)
+
+- Author metadata in `pyproject.toml`: add email / ORCID / lab as second copyright holder? (cheap, do before first PyPI release.)
+- Confirm a SOUNDMODEL notebook reproduces end-to-end under the new names + aliases (equivalence check on real data).
 
 ## How to resume in a new Claude Cowork conversation
 

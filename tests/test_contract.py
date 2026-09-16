@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from leadyna import LatentSeries
-from leadyna.model import StratifiedLinear
+from leadyna.model import LinearLEAD
 
 
 def _good():
@@ -91,13 +91,13 @@ def test_category_labels_extra_key():
 def test_model_rejects_both_latentseries_and_inputs():
     s, i = _good()
     ls = LatentSeries(s, i)
-    m = StratifiedLinear(tau=10.0, process_noise=0.2, measure_noise=0.3)
+    m = LinearLEAD(tau=10.0, process_noise=0.2, measure_noise=0.3)
     with pytest.raises(TypeError):
         m.loglikelihood(ls, i)
 
 
 def test_model_requires_inputs_for_plain_dict():
     s, _ = _good()
-    m = StratifiedLinear(tau=10.0, process_noise=0.2, measure_noise=0.3)
+    m = LinearLEAD(tau=10.0, process_noise=0.2, measure_noise=0.3)
     with pytest.raises(TypeError):
         m.loglikelihood(s)

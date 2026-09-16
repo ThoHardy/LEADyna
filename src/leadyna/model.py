@@ -1,4 +1,5 @@
 
+import re
 import warnings
 from abc import ABC, abstractmethod
 import numpy as np
@@ -144,12 +145,19 @@ def compute_ukf_loglikelihood(
 
 
 # =============================================================================
-# LEAD Abstract Base Class (formerly UPP)
+# LEAD Abstract Base Class
 # =============================================================================
 
-class LEAD_abstract(ABC):
+class BaseLEADModel(ABC):
     """
     Abstract base class for Latent Evidence Accumulation Dynamics (LEAD) models.
+
+    The core is modality-agnostic: it consumes pre-extracted latent time-series
+    (a :class:`~leadyna.datasets.LatentSeries` or a legacy ``(state, input)``
+    dict pair keyed by ``signal_category``) and knows nothing about EEG channels,
+    decimation or acquisition metadata. Category-specific models are free in the
+    number of categories they carry (see ``n_categories``), so the same core
+    serves 2-category iEEG paradigms and 7-level SNR designs alike.
     """
     
     _param_names = ['tau', 'process_noise', 'measure_noise']
@@ -159,6 +167,35 @@ class LEAD_abstract(ABC):
         self.process_noise = process_noise
         self.measure_noise = measure_noise
         self.dt = 1  # Default dt, can be overridden simulation-side or here
+
+    # --- Stratified-weight helper ----------------------------------------
+
+    def _register_stratified(self, weights: dict, prefixes, n_categories: int) -> dict:
+        """Set per-category weight attributes ``{prefix}{i}`` from ``weights``.
+
+        Replaces the old hard-coded ``w0..w6`` signature: for each prefix (e.g.
+        ``"w"``, ``"g"``) it creates ``n_categories`` attributes, defaulting each
+        to 0, and validates that every supplied key matches an expected
+        ``{prefix}{index}`` with ``index < n_categories``. Returns, per prefix,
+        the ordered list of attribute names (used to build ``_param_names``).
+        """
+        allowed = {}
+        for pfx in prefixes:
+            for i in range(n_categories):
+                allowed[f"{pfx}{i}"] = pfx
+        for key in weights:
+            if key not in allowed:
+                raise TypeError(
+                    f"{type(self).__name__} got an unexpected weight '{key}'. "
+                    f"For n_categories={n_categories}, expected any of "
+                    f"{sorted(allowed)}."
+                )
+        names = {pfx: [] for pfx in prefixes}
+        for pfx in prefixes:
+            for i in range(n_categories):
+                setattr(self, f"{pfx}{i}", weights.get(f"{pfx}{i}", 0))
+                names[pfx].append(f"{pfx}{i}")
+        return names
 
     # --- Abstract Interface ---
 
@@ -349,18 +386,24 @@ class LEAD_abstract(ABC):
 # Concrete Implementations
 # =============================================================================
 
-class StratifiedLinear(LEAD_abstract):
+class LinearLEAD(BaseLEADModel):
     """
-    Standard Linear Model with category-specific weights.
+    Linear model with category-specific input weights.
     dx/dt = -x/tau + w_category * input
-    """
-    
-    _param_names = LEAD_abstract._param_names + [f'w{i}' for i in range(7)]
 
-    def __init__(self, tau, process_noise, measure_noise, 
-                 w0=0, w1=0, w2=0, w3=0, w4=0, w5=0, w6=0):
+    ``n_categories`` sets how many category weights ``w0..w{n_categories-1}``
+    exist (default 7, matching the original SNR design). ``baseline_category``
+    (default 0) marks the resting/baseline category whose weight is fixed to 0
+    by the clever-fit strategies.
+    """
+
+    def __init__(self, tau, process_noise, measure_noise,
+                 *, n_categories=7, baseline_category=0, **weights):
         super().__init__(tau, process_noise, measure_noise)
-        self.w0, self.w1, self.w2, self.w3, self.w4, self.w5, self.w6 = w0, w1, w2, w3, w4, w5, w6
+        self.n_categories = n_categories
+        self.baseline_category = baseline_category
+        names = self._register_stratified(weights, ['w'], n_categories)
+        self._param_names = BaseLEADModel._param_names + names['w']
 
     def input_function(self, input_value, signal_category):
         w = getattr(self, f"w{signal_category}")
@@ -415,12 +458,12 @@ class StratifiedLinear(LEAD_abstract):
         return total_ll
 
 
-class NonLinear1(LEAD_abstract):
+class SigmoidFeedbackLEAD(BaseLEADModel):
     """
-    Single-category Nonlinear Model (Input Weight + Sigmoid Feedback).
-    dx/dt = -x/tau + w * input + gain / (1 + exp(slope*(threshold - x)))
+    Single-category nonlinear model (input weight + state-dependent sigmoid feedback).
+    dx/dt = -x/tau + w * input + gain / (1 + exp(sharpness*(threshold - x)))
     """
-    _param_names = LEAD_abstract._param_names + ['input_weight', 'gain', 'threshold', 'sharpness']
+    _param_names = BaseLEADModel._param_names + ['input_weight', 'gain', 'threshold', 'sharpness']
 
     def __init__(self, tau, process_noise, measure_noise, input_weight, gain, threshold, sharpness):
         super().__init__(tau, process_noise, measure_noise)
@@ -448,19 +491,21 @@ class NonLinear1(LEAD_abstract):
         return fx
 
 
-class StratifiedNonLinear1(LEAD_abstract):
+class StratifiedSigmoidFeedbackLEAD(BaseLEADModel):
     """
-    Stratified version of NonLinear1 (Input weights vary by category).
+    Stratified version of SigmoidFeedbackLEAD (input weights vary by category).
     """
-    _param_names = LEAD_abstract._param_names + [f'w{i}' for i in range(7)] + ['gain', 'threshold', 'sharpness'] # I forgot sharpness but this may break compatibility when loading parameters, so IMPORTANT TO DO LATER (resolved but confirm)
 
     def __init__(self, tau, process_noise, measure_noise, gain, threshold, sharpness,
-                 w0=0, w1=0, w2=0, w3=0, w4=0, w5=0, w6=0):
+                 *, n_categories=7, baseline_category=0, **weights):
         super().__init__(tau, process_noise, measure_noise)
         self.gain = gain
         self.threshold = threshold
         self.sharpness = sharpness
-        self.w0, self.w1, self.w2, self.w3, self.w4, self.w5, self.w6 = w0, w1, w2, w3, w4, w5, w6
+        self.n_categories = n_categories
+        self.baseline_category = baseline_category
+        names = self._register_stratified(weights, ['w'], n_categories)
+        self._param_names = BaseLEADModel._param_names + names['w'] + ['gain', 'threshold', 'sharpness']
 
     def input_function(self, input_value, signal_category):
         w = getattr(self, f"w{signal_category}")
@@ -481,11 +526,11 @@ class StratifiedNonLinear1(LEAD_abstract):
         return fx
 
 
-class NonLinear2(LEAD_abstract):
+class AffineFeedbackLEAD(BaseLEADModel):
     """
-    dx/dt = -x + w*u + (a*x + b) * sigmoid(...)
+    dx/dt = -x/tau + w*u + (a*x + b) * sigmoid(...)
     """
-    _param_names = LEAD_abstract._param_names + ['input_weight', 'a', 'b', 'threshold', 'sharpness']
+    _param_names = BaseLEADModel._param_names + ['input_weight', 'a', 'b', 'threshold', 'sharpness']
 
     def __init__(self, tau, process_noise, measure_noise, input_weight, a, b, threshold, sharpness):
         super().__init__(tau, process_noise, measure_noise)
@@ -514,20 +559,22 @@ class NonLinear2(LEAD_abstract):
         return fx
 
 
-class StratifiedNonLinear2(LEAD_abstract):
+class StratifiedAffineFeedbackLEAD(BaseLEADModel):
     """
-    Stratified NonLinear2.
+    Stratified AffineFeedbackLEAD.
     """
-    _param_names = LEAD_abstract._param_names + [f'w{i}' for i in range(7)] + ['a', 'b', 'threshold', 'sharpness']
 
     def __init__(self, tau, process_noise, measure_noise, a, b, threshold, sharpness,
-                 w0=0, w1=0, w2=0, w3=0, w4=0, w5=0, w6=0):
+                 *, n_categories=7, baseline_category=0, **weights):
         super().__init__(tau, process_noise, measure_noise)
         self.a = a
         self.b = b
         self.threshold = threshold
         self.sharpness = sharpness
-        self.w0, self.w1, self.w2, self.w3, self.w4, self.w5, self.w6 = w0, w1, w2, w3, w4, w5, w6
+        self.n_categories = n_categories
+        self.baseline_category = baseline_category
+        names = self._register_stratified(weights, ['w'], n_categories)
+        self._param_names = BaseLEADModel._param_names + names['w'] + ['a', 'b', 'threshold', 'sharpness']
 
     def input_function(self, input_value, signal_category):
         w = getattr(self, f"w{signal_category}")
@@ -550,11 +597,11 @@ class StratifiedNonLinear2(LEAD_abstract):
         return fx
 
 
-class GainModulation(LEAD_abstract):
+class GainModulationLEAD(BaseLEADModel):
     """
-    dx/dt = -x + w*u + gain*u*sigmoid(...)
+    dx/dt = -x/tau + w*u + gain*u*sigmoid(...)
     """
-    _param_names = LEAD_abstract._param_names + ['input_weight', 'gain', 'threshold', 'sharpness']
+    _param_names = BaseLEADModel._param_names + ['input_weight', 'gain', 'threshold', 'sharpness']
 
     def __init__(self, tau, process_noise, measure_noise, input_weight, gain, threshold, sharpness):
         super().__init__(tau, process_noise, measure_noise)
@@ -582,23 +629,26 @@ class GainModulation(LEAD_abstract):
         return fx
 
 
-class StratifiedGainModulation(LEAD_abstract):
+class StratifiedGainModulationLEAD(BaseLEADModel):
     """
-    Stratified Gain Modulation.
+    Stratified gain modulation.
     """
-    _param_names = LEAD_abstract._param_names + ['threshold', 'sharpness'] + [f'w{i}' for i in range(7)] + [f'g{i}' for i in range(7)]
 
     def __init__(
         self, tau, process_noise, measure_noise,
         threshold, sharpness,
-        w0=0, w1=0, w2=0, w3=0, w4=0, w5=0, w6=0,
-        g0=0, g1=0, g2=0, g3=0, g4=0, g5=0, g6=0
+        *, n_categories=7, baseline_category=0, **weights
     ):
         super().__init__(tau, process_noise, measure_noise)
         self.threshold = threshold
         self.sharpness = sharpness
-        self.w0, self.w1, self.w2, self.w3, self.w4, self.w5, self.w6 = w0, w1, w2, w3, w4, w5, w6
-        self.g0, self.g1, self.g2, self.g3, self.g4, self.g5, self.g6 = g0, g1, g2, g3, g4, g5, g6
+        self.n_categories = n_categories
+        self.baseline_category = baseline_category
+        names = self._register_stratified(weights, ['w', 'g'], n_categories)
+        self._param_names = (
+            BaseLEADModel._param_names + ['threshold', 'sharpness']
+            + names['w'] + names['g']
+        )
 
     def input_function(self, input_value, signal_category):
         w = getattr(self, f"w{signal_category}")
@@ -635,3 +685,36 @@ class StratifiedGainModulation(LEAD_abstract):
             
             return x + dxdt * dt
         return fx
+
+
+# =============================================================================
+# Backwards-compatible aliases (deprecated: prefer the *LEAD names)
+# =============================================================================
+# The old insider names still resolve so existing SOUNDMODEL notebooks and any
+# saved code keep importing them, but they emit a DeprecationWarning pointing at
+# the new public name. Resolves both ``model.StratifiedLinear`` and
+# ``from leadyna.model import StratifiedLinear`` (PEP 562 module __getattr__).
+
+_DEPRECATED_ALIASES = {
+    'LEAD_abstract': 'BaseLEADModel',
+    'StratifiedLinear': 'LinearLEAD',
+    'NonLinear1': 'SigmoidFeedbackLEAD',
+    'StratifiedNonLinear1': 'StratifiedSigmoidFeedbackLEAD',
+    'NonLinear2': 'AffineFeedbackLEAD',
+    'StratifiedNonLinear2': 'StratifiedAffineFeedbackLEAD',
+    'GainModulation': 'GainModulationLEAD',
+    'StratifiedGainModulation': 'StratifiedGainModulationLEAD',
+}
+
+
+def __getattr__(name):
+    if name in _DEPRECATED_ALIASES:
+        new_name = _DEPRECATED_ALIASES[name]
+        warnings.warn(
+            f"leadyna.model.{name} is a deprecated alias for "
+            f"leadyna.model.{new_name}; update your code to the new name.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[new_name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

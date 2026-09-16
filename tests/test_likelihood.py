@@ -8,7 +8,7 @@ check validates the whole UKF engine for the linear case.
 import numpy as np
 
 from leadyna import LatentSeries
-from leadyna.model import StratifiedLinear
+from leadyna.model import LinearLEAD
 
 
 def _toy_linear_data(seed=0, n_trials=8, n_t=40):
@@ -25,7 +25,7 @@ def _toy_linear_data(seed=0, n_trials=8, n_t=40):
 
 
 def _model():
-    return StratifiedLinear(tau=10.0, process_noise=0.2, measure_noise=0.3, w1=0.5)
+    return LinearLEAD(tau=10.0, process_noise=0.2, measure_noise=0.3, w1=0.5)
 
 
 def test_ukf_matches_exact_kalman():
