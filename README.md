@@ -37,7 +37,7 @@ yours, on purpose: they encode your experimental design and your input hypothesi
 | 2. State the input hypothesis | you | choose where `I(t)` is assumed constant, cut the windows, build `inputs` |
 | 3. Fit and compare | `clever_fit_*` | fit Linear / Fixed gain / Modulated gain, compare held-out log-likelihoods |
 
-The full script is in [`examples/toy_example.py`](examples/toy_example.py) (about 8 minutes on one core).
+The full script is in [`examples/toy_example.py`](examples/toy_example.py) (under a minute on a laptop).
 
 ### Step 0 — epochs in the expected format
 
@@ -60,7 +60,7 @@ import numpy as np
 import pandas as pd
 
 rng = np.random.default_rng(0)
-sfreq, n_channels, n_per_level = 250.0, 13, 20
+sfreq, n_channels, n_per_level = 250.0, 13, 40
 times = np.arange(-50, 250) / sfreq                    # -0.2 s ... 0.996 s
 levels = rng.permutation(np.repeat([0, 1, 2, 3, 4], n_per_level))  # 0 = rest, 1-4 = SNR
 p_access = np.array([0.0, 0.1, 0.3, 0.6, 0.9])        # all-or-none "ignition" probability
@@ -101,7 +101,7 @@ from leadyna import decode_latent
 
 latent = decode_latent(epochs, train_window=(0.4, 0.8))
 latent.category_labels     # {0: 'snr=0 (baseline)', 1: 'snr=1', ..., 4: 'snr=4'}
-latent.states[4].shape     # (20, 120): 20 trials x 120 samples at 100 Hz
+latent.states[4].shape     # (40, 120): 40 trials x 120 samples at 100 Hz
 latent.times               # sample times in seconds
 ```
 
@@ -174,27 +174,25 @@ def split(states, inputs, test_fraction=0.2, seed=0):
 
 train, test = split(states, inputs)
 
-light = dict(threshold_grid=(0.5, 1.5), n_loops=1)   # light search for the toy; drop for real data
-linear = clever_fit_linear(train, n_jobs=1)
-fixed_gain = clever_fit_nonlinear1(linear, train, n_jobs=1, **light)
-modulated_gain = clever_fit_gainmodul(linear, train, n_jobs=1, **light)
+linear = clever_fit_linear(train)
+fixed_gain = clever_fit_nonlinear1(linear, train)
+modulated_gain = clever_fit_gainmodul(linear, train)
 
 for name, m in [("Linear", linear), ("Fixed gain", fixed_gain), ("Modulated gain", modulated_gain)]:
-    print(f"{name:15s} held-out log-likelihood: {m.loglikelihood(test, n_jobs=1):9.1f}")
+    print(f"{name:15s} held-out log-likelihood: {m.loglikelihood(test):9.1f}")
 ```
 
-On the toy data this prints (about 8 minutes on one core):
+On the toy data this prints:
 
 ```
-Linear          held-out log-likelihood:   -2827.7
-Fixed gain      held-out log-likelihood:   -2306.1
-Modulated gain  held-out log-likelihood:   -2466.1
+Linear          held-out log-likelihood:   -5252.7
+Fixed gain      held-out log-likelihood:   -4330.9
+Modulated gain  held-out log-likelihood:   -4450.9
 ```
 
 The fixed-gain model wins, as it should: in the simulation the "accessed" state has the
 same amplitude at every SNR and only its probability changes, which is what a single
-shared non-linearity produces. The light search (`threshold_grid=(0.5, 1.5)`,
-`n_loops=1`) keeps the toy short; drop it for real analyses.
+shared non-linearity produces.
 
 | Model | Class | Fitting function |
 |---|---|---|
@@ -216,10 +214,40 @@ Fitting options shared by the `clever_fit_*` functions:
   (0, 0.5), threshold (0, 2), sharpness (0, 10). Bounds are in units of `dt`.
 - `threshold_grid` and `sharpness` (non-linear models): initial thresholds tried and the
   fixed sigmoid sharpness (defaults `linspace(0, 2, 5)` and 5).
-- `n_jobs`: `1` for small or local fits; leave unset (8 workers) for large datasets.
+- `n_jobs`: only used by the `"filterpy"` engine (see below).
 
 Missing stimulus categories are fine (a subject with no trial at one level simply has
 no key for it); category 0 is required.
+
+### Likelihood engines
+
+Every model computes its UKF log-likelihood with one of two engines:
+
+- `"fast"` (default): numpy, vectorized over trials. The filter stays sequential in time
+  but advances all trials of a category at once; inputs may vary over time and across
+  trials. A few hundred times faster than `"filterpy"` on realistic data (one
+  evaluation on 4 levels x 150 trials: ~50 ms instead of ~26 s), and equal to it to
+  ~1e-11 on the log-likelihood.
+- `"filterpy"`: the LEAD engine (filterpy UKF, one trial at a time, parallelized with
+  joblib, `n_jobs` / `batch_size`). Use it to reproduce LEAD / SOUNDMODEL results
+  **bit-for-bit**: the fast engine's 1e-11 differences are amplified by the finite-difference
+  gradients of L-BFGS-B, so fitted parameters differ at the ~1e-5 level.
+
+```python
+import leadyna
+
+model.loglikelihood(data, engine="filterpy")      # one call
+model.engine = "filterpy"                          # one model
+with leadyna.use_engine("filterpy"):               # everything, clever fits included
+    linear = clever_fit_linear(train)
+```
+
+The fast engine calls each model's `_make_fx` transition on whole vectors of states and
+inputs (one call per time step and category), so inputs may differ across trials at no
+extra cost. All built-in models are element-wise in `x` and `u`. A custom model whose
+transition only accepts a scalar `u` sets the class attribute `vector_inputs = False`:
+the engine then groups trials by input value (exact, but slower when every trial has
+its own input).
 
 ## The core contract: `LatentSeries`
 
@@ -239,8 +267,7 @@ model = LinearLEAD(tau=10.0, process_noise=0.2, measure_noise=0.2, n_categories=
 model.fit(data,
           init_params=[10, 0.2, 0.2] + [0] * 2,
           bounds=[(1, 25), (0.01, 1), (0.01, 1)] + [(0, 1)] * 2,
-          fixed_params=["tau", "process_noise", "measure_noise", "w0"],
-          n_jobs=1)
+          fixed_params=["tau", "process_noise", "measure_noise", "w0"])
 ```
 
 `inputs` may be `None` (a frontend's output); attach them with
@@ -254,7 +281,9 @@ step), which reproduces the historical numerics; with the EEG frontend's default
 - `clever_fit_*` now take **already-windowed** data. In LEAD they cut the stimulus
   window themselves with `input_start_index=75, input_stop_index=100` as defaults.
   Passing these two arguments still reproduces the LEAD behaviour (with a
-  `DeprecationWarning`); results are bit-identical to LEAD (tested, `pytest -m slow`).
+  `DeprecationWarning`); with `use_engine("filterpy")` results are bit-identical to LEAD
+  (tested, `pytest -m slow`).
+- The default likelihood engine is now `"fast"` (see *Likelihood engines*).
 - `STG(path, tmin, tmax)` (milliseconds, Sergent et al. 2021 conventions, dict output)
   still works but is deprecated in favour of `decode_latent` (seconds, `LatentSeries`
   output). The experimental `substract_pattern` and `sort_by_snr=False` options were

@@ -1,6 +1,6 @@
 # LEADyna refactor — status & resume guide
 
-*As of 2026-10-06 (Phase 3b complete: EEG frontend generalized, clever fits on windowed data). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
+*As of 2026-10-07 (Phase 3b complete: EEG frontend generalized, clever fits on windowed data, fast likelihood engine). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
 
 ## What this is
 
@@ -48,6 +48,9 @@ Turning the prototype `ThoHardy/LEAD` into **LEADyna** — a pip-installable, mo
   - README rewritten as a tutorial (toy EEG → `decode_latent` → input hypothesis → three fits → held-out comparison); runnable copy in `examples/toy_example.py`.
   - Tests: 50 fast + 3 slow (`tests/_legacy_stg.py` and `tests/_legacy_fitting_tools.py` are frozen LEAD oracles).
 
+- [x] **Fast likelihood engine** (2026-10-07): `compute_ukf_loglikelihood_fast` in `model.py`, numpy, vectorized over trials (sequential in time). Default `BaseLEADModel.engine = "fast"`; `"filterpy"` (the LEAD engine) selectable per call (`engine=`), per model (`model.engine`) or globally (`leadyna.use_engine("filterpy")`, which also covers the clever fits). Only the base class changed. Equal to filterpy to ~1e-11 on the log-likelihood for all 7 concrete models, with constant and trial-varying inputs, and to the exact Kalman for the linear model (`tests/test_engines.py`). ×550 per evaluation on infant-sized data (4 levels × 150 trials); README toy example 8 min → 46 s with the full search. Fitted parameters differ from filterpy by ~1e-5 (finite-difference gradients); **SOUNDMODEL numbers are reproduced bit-for-bit only with `use_engine("filterpy")`**. Clever-fit LEAD-equivalence tests now run under both engines (fast: seconds; filterpy: `pytest -m slow`). Benchmark of options A (numpy, chosen), B (numba), C (JAX) in `benchmarks/ukf_engines/`.
+- [x] **Trial-varying inputs at full speed** (2026-10-07): `StratifiedGainModulationLEAD` now computes `g{int(category*u)}` element-wise over trials (`_gain_for`, also used by `nonlinearity`, which previously applied trial 0's input to every simulated trial in `measure_simulations`; out-of-range `u` now raises instead of failing on a missing attribute). The fast engine passes the input vector to `_make_fx` (`BaseLEADModel.vector_inputs = True`; custom scalar-`u` models set it to False to get the grouping fallback). Numerics unchanged (fast = filterpy to 0 on shared inputs; LEAD equivalence under filterpy re-checked).
+
 ## Environment (important lesson)
 
 Install into an **isolated environment**, never the conda `base` env. Unpinned `numpy>=1.24` let pip pull numpy 2.x into base and break other tools (gensim, numba need numpy < 2). The fix is isolation, not upper-capping deps — libraries declare lower bounds only. `leadyna` itself runs fine under numpy 2.x.
@@ -73,7 +76,7 @@ To repair base if numpy got bumped there: `python -m pip install "numpy==1.26.4"
 - [x] UKF-vs-Kalman check is now the first real test in `tests/`. **Still TODO:** add GitHub Actions CI (Phase 5).
 - [x] **Phase 2 — `LatentSeries` contract**: done (see **Done** above).
 - [x] **Phase 3 — de-EEG the core**: done (see **Done** above) — free `n_categories`, explicit `baseline_category`, public `*LEAD` names + deprecated aliases, EEG assumptions moved to `frontends/eeg_mne.py`.
-- [ ] **Performance**: the filterpy UKF costs ~150 µs per sample (pure Python per step); a 1-D UKF vectorized over trials would make infant/adult fits with 100–200 trials per level much faster. Worth doing before running the full developmental analysis.
+- [ ] **JAX engine (option C)** — revisit when models get bigger (multi-dimensional latents, many parameters): exact autodiff gradients for L-BFGS-B. See `benchmarks/ukf_engines/README.md`.
 - [ ] **CV in SOUNDMODEL notebooks** (`5CV_*`): `KFold` runs over `arange(min n_trials across categories)`, so trials beyond the smallest category are never used. Fix when migrating CV into `compare.py` (split each category separately).
 - [ ] **Phase 4 — dynamics**: expose `model.drift()` / `drift_deriv()`; migrate bifurcation-probability + metastability score from SOUNDMODEL into `lead/dynamics.py`.
 - [ ] **Phase 5 — compare**: migrate CV / Bayesian model selection / OVL-STD-Wasserstein into `lead/compare.py`.

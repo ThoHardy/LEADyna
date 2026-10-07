@@ -13,6 +13,7 @@ from .model import (
     StratifiedAffineFeedbackLEAD,
     GainModulationLEAD,
     StratifiedGainModulationLEAD,
+    use_engine,
 )
 
 try:
@@ -58,6 +59,7 @@ __all__ = [
     "StratifiedAffineFeedbackLEAD",
     "GainModulationLEAD",
     "StratifiedGainModulationLEAD",
+    "use_engine",
     "decode_latent",
     "STG",
     "colormap",

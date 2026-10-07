@@ -1,8 +1,7 @@
 """LEADyna toy example: simulated EEG epochs -> latent time-series -> 3 models -> comparison.
 
 Run with:  python examples/toy_example.py
-Same code as the README tutorial. Takes about 8 minutes on one core (the UKF likelihood
-is evaluated many times by the multi-start fits).
+Same code as the README tutorial. Runs in under a minute.
 """
 import mne
 import numpy as np
@@ -17,7 +16,7 @@ mne.set_log_level("ERROR")
 # 0. Toy EEG epochs in the format the frontend expects
 # ---------------------------------------------------------------------------
 rng = np.random.default_rng(0)
-sfreq, n_channels, n_per_level = 250.0, 13, 20
+sfreq, n_channels, n_per_level = 250.0, 13, 40
 times = np.arange(-50, 250) / sfreq                    # -0.2 s ... 0.996 s
 levels = rng.permutation(np.repeat([0, 1, 2, 3, 4], n_per_level))  # 0 = rest, 1-4 = SNR
 p_access = np.array([0.0, 0.1, 0.3, 0.6, 0.9])        # all-or-none "ignition" probability
@@ -75,10 +74,9 @@ def split(states, inputs, test_fraction=0.2, seed=0):
 
 train, test = split(states, inputs)
 
-light = dict(threshold_grid=(0.5, 1.5), n_loops=1)   # light search for the toy; drop for real data
-linear = clever_fit_linear(train, n_jobs=1)
-fixed_gain = clever_fit_nonlinear1(linear, train, n_jobs=1, **light)
-modulated_gain = clever_fit_gainmodul(linear, train, n_jobs=1, **light)
+linear = clever_fit_linear(train)
+fixed_gain = clever_fit_nonlinear1(linear, train)
+modulated_gain = clever_fit_gainmodul(linear, train)
 
 for name, m in [("Linear", linear), ("Fixed gain", fixed_gain), ("Modulated gain", modulated_gain)]:
-    print(f"{name:15s} held-out log-likelihood: {m.loglikelihood(test, n_jobs=1):9.1f}")
+    print(f"{name:15s} held-out log-likelihood: {m.loglikelihood(test):9.1f}")

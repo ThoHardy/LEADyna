@@ -1,7 +1,9 @@
 """clever_fit_*: windowed inputs, LEAD equivalence, bounds options, missing categories.
 
-The LEAD-equivalence tests (bit-identical parameters vs the prototype) take ~6 min
-and are marked ``slow``: run them with ``pytest -m slow``.
+The equivalence tests compare the windowed clever fits with the frozen LEAD code
+(bit-identical parameters) under both likelihood engines. Under the fast engine they
+take seconds; under the filterpy engine (exact LEAD reproduction) they take ~6 min and
+are marked ``slow``: run them with ``pytest -m slow``.
 """
 import warnings
 
@@ -10,16 +12,19 @@ import pytest
 
 import _legacy_fitting_tools as legacy
 from leadyna import LatentSeries, fitting_tools
-from leadyna.model import BaseLEADModel, StratifiedSigmoidFeedbackLEAD
+from leadyna.model import BaseLEADModel, StratifiedSigmoidFeedbackLEAD, use_engine
 
 START, STOP = 15, 35
 
 
+ENGINES = ["fast", pytest.param("filterpy", marks=pytest.mark.slow)]
+
+
 @pytest.fixture(autouse=True)
 def _single_process(monkeypatch):
-    # LEAD code paths call loglikelihood with the engine default n_jobs=8; force 1 so
+    # LEAD code paths call loglikelihood with the filterpy default n_jobs=8; force 1 so
     # the oracle runs fast. Results do not depend on n_jobs.
-    monkeypatch.setattr(BaseLEADModel.loglikelihood, "__defaults__", (None, 1, 20))
+    monkeypatch.setattr(BaseLEADModel.loglikelihood, "__defaults__", (None, 1, 20, None))
 
 
 @pytest.fixture(scope="module")
@@ -49,28 +54,30 @@ def _same(m1, m2):
         assert p1[k] == p2[k], (k, p1[k], p2[k])
 
 
-@pytest.mark.slow
-def test_linear_and_null_match_lead(raw):
+@pytest.mark.parametrize("engine", ENGINES)
+def test_linear_and_null_match_lead(raw, engine):
     states, inputs = raw
     w = _windowed(states, inputs)
-    old_lin = legacy.clever_fit_linear(states, inputs, START, STOP)
-    old_null = legacy.clever_fit_null(states, inputs, START, STOP)
-    _same(fitting_tools.clever_fit_linear(w, n_jobs=1), old_lin)
-    _same(fitting_tools.clever_fit_null(w, n_jobs=1), old_null)
-    with pytest.warns(DeprecationWarning, match="input_start_index"):
-        legacy_path = fitting_tools.clever_fit_linear(states, inputs, START, STOP)
+    with use_engine(engine):
+        old_lin = legacy.clever_fit_linear(states, inputs, START, STOP)
+        old_null = legacy.clever_fit_null(states, inputs, START, STOP)
+        _same(fitting_tools.clever_fit_linear(w, n_jobs=1), old_lin)
+        _same(fitting_tools.clever_fit_null(w, n_jobs=1), old_null)
+        with pytest.warns(DeprecationWarning, match="input_start_index"):
+            legacy_path = fitting_tools.clever_fit_linear(states, inputs, START, STOP)
     _same(legacy_path, old_lin)
 
 
-@pytest.mark.slow
+@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("name", ["clever_fit_gainmodul", "clever_fit_nonlinear1"])
-def test_nonlinear_fits_match_lead(raw, name):
+def test_nonlinear_fits_match_lead(raw, name, engine):
     states, inputs = raw
-    lin = legacy.clever_fit_linear(states, inputs, START, STOP)
     kw = dict(n_loops=1)
-    old = getattr(legacy, name)(lin, states, inputs, input_start_index=START,
-                                input_stop_index=STOP, **kw)
-    new = getattr(fitting_tools, name)(lin, _windowed(states, inputs), n_jobs=1, **kw)
+    with use_engine(engine):
+        lin = legacy.clever_fit_linear(states, inputs, START, STOP)
+        old = getattr(legacy, name)(lin, states, inputs, input_start_index=START,
+                                    input_stop_index=STOP, **kw)
+        new = getattr(fitting_tools, name)(lin, _windowed(states, inputs), n_jobs=1, **kw)
     _same(new, old)
 
 
