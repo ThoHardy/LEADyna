@@ -28,7 +28,7 @@ _FRONTEND_MODULES = {
     "dataprocess": (".dataprocess", "eeg"),  # deprecated alias for eeg_mne
     "visual": (".visual", "viz"),
 }
-_FRONTEND_ATTR = {"STG": "eeg_mne", "colormap": "visual"}
+_FRONTEND_ATTR = {"decode_latent": "eeg_mne", "STG": "eeg_mne", "colormap": "visual"}
 
 
 def __getattr__(name):
@@ -58,6 +58,7 @@ __all__ = [
     "StratifiedAffineFeedbackLEAD",
     "GainModulationLEAD",
     "StratifiedGainModulationLEAD",
+    "decode_latent",
     "STG",
     "colormap",
     "datasets",

@@ -26,9 +26,12 @@ class LatentSeries:
     states : dict[int, numpy.ndarray]
         Latent variable ``s(t)`` per category, each array of shape
         ``(n_trials, n_timesteps)``.
-    inputs : dict[int, numpy.ndarray]
+    inputs : dict[int, numpy.ndarray] or None
         Exogenous drive ``I(t)`` per category, same shape as the matching
-        ``states`` entry.
+        ``states`` entry. ``None`` means the input hypothesis has not been
+        specified yet — this is what a frontend returns, since only the user
+        knows which ``I(t)`` (and which window) to assume. Fitting requires it:
+        add it with :meth:`with_inputs`.
     dt : float, optional
         Timestep between successive samples. Defaults to ``1.0`` (index units:
         one sample = one step), which reproduces the library's historical
@@ -51,15 +54,26 @@ class LatentSeries:
     """
 
     states: dict
-    inputs: dict
+    inputs: dict | None = None
     dt: float = 1.0
     category_labels: dict | None = None
     metadata: dict | None = None
 
     def __post_init__(self):
         self.states = {k: np.asarray(v, dtype=float) for k, v in dict(self.states).items()}
-        self.inputs = {k: np.asarray(v, dtype=float) for k, v in dict(self.inputs).items()}
+        if self.inputs is not None:
+            self.inputs = {k: np.asarray(v, dtype=float) for k, v in dict(self.inputs).items()}
         self.validate()
+
+    def with_inputs(self, inputs: dict) -> LatentSeries:
+        """Return a copy of this series carrying the input hypothesis ``inputs``."""
+        return LatentSeries(self.states, inputs, dt=self.dt,
+                            category_labels=self.category_labels, metadata=self.metadata)
+
+    @property
+    def times(self):
+        """Sample times in seconds, if the frontend recorded them (else ``None``)."""
+        return None if self.metadata is None else self.metadata.get("times")
 
     # -- introspection ------------------------------------------------------
     @property
@@ -86,19 +100,28 @@ class LatentSeries:
         if not self.states:
             raise ValueError("states is empty: at least one category is required.")
 
-        if set(self.states) != set(self.inputs):
+        if self.inputs is not None and set(self.states) != set(self.inputs):
             raise ValueError(
                 "states and inputs must share identical category keys; "
                 f"states has {sorted(self.states)}, inputs has {sorted(self.inputs)}."
             )
 
         for cat, arr in self.states.items():
-            inp = self.inputs[cat]
             if arr.ndim != 2:
                 raise ValueError(
                     f"states[{cat!r}] must be 2-D (n_trials, n_timesteps); got shape "
                     f"{arr.shape}. Reshape a single trial with arr[None, :]."
                 )
+            if arr.shape[1] < 2:
+                raise ValueError(
+                    f"category {cat!r} has {arr.shape[1]} timestep(s); the UKF likelihood "
+                    "needs at least 2."
+                )
+            if not np.all(np.isfinite(arr)):
+                raise ValueError(f"states[{cat!r}] contains non-finite values.")
+            if self.inputs is None:
+                continue
+            inp = self.inputs[cat]
             if inp.ndim != 2:
                 raise ValueError(
                     f"inputs[{cat!r}] must be 2-D (n_trials, n_timesteps); got shape {inp.shape}."
@@ -108,13 +131,6 @@ class LatentSeries:
                     f"states[{cat!r}] and inputs[{cat!r}] shapes differ: "
                     f"{arr.shape} vs {inp.shape}."
                 )
-            if arr.shape[1] < 2:
-                raise ValueError(
-                    f"category {cat!r} has {arr.shape[1]} timestep(s); the UKF likelihood "
-                    "needs at least 2."
-                )
-            if not np.all(np.isfinite(arr)):
-                raise ValueError(f"states[{cat!r}] contains non-finite values.")
             if not np.all(np.isfinite(inp)):
                 raise ValueError(f"inputs[{cat!r}] contains non-finite values.")
 

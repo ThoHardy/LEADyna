@@ -317,6 +317,11 @@ class BaseLEADModel(ABC):
                     "Pass a LatentSeries alone, or state_series and input_series "
                     "as separate dicts — not both."
                 )
+            if state_series.inputs is None:
+                raise ValueError(
+                    "This LatentSeries has no inputs yet: define your input hypothesis "
+                    "I(t) and attach it with latent.with_inputs(inputs) before fitting."
+                )
             self.dt = state_series.dt
             return state_series.states, state_series.inputs
         if input_series is None:

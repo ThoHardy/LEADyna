@@ -5,7 +5,7 @@ This shim re-exports the public API and will be removed in a future release.
 """
 import warnings as _warnings
 
-from .frontends.eeg_mne import STG  # noqa: F401
+from .frontends.eeg_mne import STG, decode_latent  # noqa: F401
 
 _warnings.warn(
     "leadyna.dataprocess has moved to leadyna.frontends.eeg_mne; "
@@ -14,4 +14,4 @@ _warnings.warn(
     stacklevel=2,
 )
 
-__all__ = ["STG"]
+__all__ = ["STG", "decode_latent"]

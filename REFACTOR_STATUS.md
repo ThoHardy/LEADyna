@@ -1,6 +1,6 @@
 # LEADyna refactor — status & resume guide
 
-*As of 2026-09-16 (Phase 3 complete). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
+*As of 2026-10-06 (Phase 3b complete: EEG frontend generalized, clever fits on windowed data). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
 
 ## What this is
 
@@ -39,6 +39,15 @@ Turning the prototype `ThoHardy/LEAD` into **LEADyna** — a pip-installable, mo
   - **EEG assumptions moved out of the core**: `dataprocess.py` became the `frontends/` subpackage (`leadyna.frontends.eeg_mne`); the hard-coded 64 channels are now inferred from the data and `decimate(5)` is a `decimate_factor` argument. `leadyna.dataprocess` stays as a deprecated shim. The UKF engine and every model's physics are untouched.
   - **Tests: 34 pass** (was 18). New `test_categories.py` (free `n_categories`: 7≡explicit-7, UKF≡Kalman on 3 categories, LatentSeries round-trip on 4, weight recovery, baseline exposure, stray-weight rejection) and `test_aliases.py` (every deprecated alias warns and resolves). Existing tests migrated to the new names.
 
+- [x] **Phase 3b — generalize to new EEG datasets** (2026-10-06; motivated by the developmental ba/da-in-noise dataset: adults, 11-month-olds, 4-month-olds, 13 electrodes, EEGLAB format):
+  - **Frontend**: new `decode_latent(epochs, train_window, *, condition="snr", baseline_label=0, present_label=None, cv="blocknumber", target_sfreq=100.0)` in `frontends/eeg_mne.py`. Accepts any `mne.BaseEpochs` (Epochs, EpochsArray, EEGLAB/FIF) or a path; never modifies its input; windows in seconds; integer-like labels (string labels are cast); **category 0 = baseline, hard-coded**, other labels sorted → 1..K; `cv` = block column (leave-one-block-out) or int (stratified k-fold); resampled to `target_sfreq` (decimate on integer ratios = LEAD numerics, FFT resample otherwise). Returns a `LatentSeries` with `inputs=None` and metadata `times`, `sfreq`, `trial_index` (original epoch index of every row; rows keep epoch order whatever the folds, so random block numbers are safe), `label_to_category`.
+  - `STG` kept as a deprecated wrapper (ms windows, baseline label 1, dict output, also accepts in-memory epochs): **equal to the LEAD STG to 1e-9** on synthetic Sergent-like data (test). `substract_pattern` and `sort_by_snr=False` removed.
+  - `LatentSeries.inputs` may be `None`; `with_inputs()` and `times` added; fitting a LatentSeries without inputs raises a clear error.
+  - **Backend**: `clever_fit_*` take **already-windowed** data (category 0 = baseline segments, others = constant-input window); passing `input_start_index`/`input_stop_index` reproduces LEAD (DeprecationWarning). Options `bounds` (dict, defaults = SOUNDMODEL values), `threshold_grid`, `sharpness`, `n_jobs`. Non-contiguous categories supported (missing level → weight stays 0). `dt` of a LatentSeries is honoured. **Bit-identical to LEAD** for linear, null, gain-modulated and fixed-gain fits (`pytest -m slow`, ~6 min).
+  - `pandas` added to the `[eeg]` extra; `LogisticRegression(penalty=...)` dropped (deprecated in scikit-learn 1.8, same L2 default).
+  - README rewritten as a tutorial (toy EEG → `decode_latent` → input hypothesis → three fits → held-out comparison); runnable copy in `examples/toy_example.py`.
+  - Tests: 50 fast + 3 slow (`tests/_legacy_stg.py` and `tests/_legacy_fitting_tools.py` are frozen LEAD oracles).
+
 ## Environment (important lesson)
 
 Install into an **isolated environment**, never the conda `base` env. Unpinned `numpy>=1.24` let pip pull numpy 2.x into base and break other tools (gensim, numba need numpy < 2). The fix is isolation, not upper-capping deps — libraries declare lower bounds only. `leadyna` itself runs fine under numpy 2.x.
@@ -64,6 +73,8 @@ To repair base if numpy got bumped there: `python -m pip install "numpy==1.26.4"
 - [x] UKF-vs-Kalman check is now the first real test in `tests/`. **Still TODO:** add GitHub Actions CI (Phase 5).
 - [x] **Phase 2 — `LatentSeries` contract**: done (see **Done** above).
 - [x] **Phase 3 — de-EEG the core**: done (see **Done** above) — free `n_categories`, explicit `baseline_category`, public `*LEAD` names + deprecated aliases, EEG assumptions moved to `frontends/eeg_mne.py`.
+- [ ] **Performance**: the filterpy UKF costs ~150 µs per sample (pure Python per step); a 1-D UKF vectorized over trials would make infant/adult fits with 100–200 trials per level much faster. Worth doing before running the full developmental analysis.
+- [ ] **CV in SOUNDMODEL notebooks** (`5CV_*`): `KFold` runs over `arange(min n_trials across categories)`, so trials beyond the smallest category are never used. Fix when migrating CV into `compare.py` (split each category separately).
 - [ ] **Phase 4 — dynamics**: expose `model.drift()` / `drift_deriv()`; migrate bifurcation-probability + metastability score from SOUNDMODEL into `lead/dynamics.py`.
 - [ ] **Phase 5 — compare**: migrate CV / Bayesian model selection / OVL-STD-Wasserstein into `lead/compare.py`.
 - [ ] **Phase 6 — one worked example** notebook (EEG `.fif` → fit → compare → bifurcation → plot).
