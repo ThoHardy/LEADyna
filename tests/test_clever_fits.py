@@ -122,3 +122,28 @@ def test_dt_from_latentseries_is_used(raw):
         lin = fitting_tools.clever_fit_linear(
             LatentSeries(w.states, w.inputs, dt=0.5), bounds={"tau": (0.5, 50)}, n_jobs=1)
     assert lin.dt == 0.5
+
+
+def test_gainmodul_n_thresholds(raw, monkeypatch):
+    states, inputs = raw
+    w = _windowed(states, inputs)
+    lin = fitting_tools.clever_fit_linear(w)
+    tried = []
+    original = fitting_tools.model.StratifiedGainModulationLEAD
+
+    def spy(*args, **kwargs):
+        tried.append(kwargs["threshold"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(fitting_tools.model, "StratifiedGainModulationLEAD", spy)
+    fitting_tools.clever_fit_gainmodul(lin, w, n_loops=1)
+    assert tried[::2] == list(np.linspace(0, 2, 5))
+    tried.clear()
+    fitting_tools.clever_fit_gainmodul(lin, w, n_loops=1, n_thresholds=3,
+                                       bounds={"threshold": (0.5, 1.5)})
+    assert tried[::2] == [0.5, 1.0, 1.5]
+    tried.clear()
+    fitting_tools.clever_fit_gainmodul(lin, w, n_loops=1, threshold_grid=(0.7,))
+    assert tried == [0.7, 0.7]
+    with pytest.raises(ValueError, match="n_thresholds"):
+        fitting_tools.clever_fit_gainmodul(lin, w, n_thresholds=0)

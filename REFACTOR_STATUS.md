@@ -76,6 +76,8 @@ To repair base if numpy got bumped there: `python -m pip install "numpy==1.26.4"
 - [x] UKF-vs-Kalman check is now the first real test in `tests/`. **Still TODO:** add GitHub Actions CI (Phase 5).
 - [x] **Phase 2 — `LatentSeries` contract**: done (see **Done** above).
 - [x] **Phase 3 — de-EEG the core**: done (see **Done** above) — free `n_categories`, explicit `baseline_category`, public `*LEAD` names + deprecated aliases, EEG assumptions moved to `frontends/eeg_mne.py`.
+- [x] `clever_fit_gainmodul(n_thresholds=5)`: number of initial thresholds, evenly spaced over the threshold bounds (2026-10-07; default reproduces LEAD; explicit `threshold_grid` overrides it).
+- [ ] **Convergence of the clever fits** (2026-10-07, `benchmarks/n_loops/`): fixed gain is far from converged at `n_loops=2` (≈46 train / 8 test nats below the joint optimum on infant-sized toy data), gain modulated converges in 1 loop but never refits `tau` (biased by short baseline segments). A final joint polish (one L-BFGS-B over all free parameters, 5–9 s) beats 8 loops for both. Decide whether to add it as an option / default.
 - [ ] **JAX engine (option C)** — revisit when models get bigger (multi-dimensional latents, many parameters): exact autodiff gradients for L-BFGS-B. See `benchmarks/ukf_engines/README.md`.
 - [ ] **CV in SOUNDMODEL notebooks** (`5CV_*`): `KFold` runs over `arange(min n_trials across categories)`, so trials beyond the smallest category are never used. Fix when migrating CV into `compare.py` (split each category separately).
 - [ ] **Phase 4 — dynamics**: expose `model.drift()` / `drift_deriv()`; migrate bifurcation-probability + metastability score from SOUNDMODEL into `lead/dynamics.py`.

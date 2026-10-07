@@ -214,6 +214,9 @@ Fitting options shared by the `clever_fit_*` functions:
   (0, 0.5), threshold (0, 2), sharpness (0, 10). Bounds are in units of `dt`.
 - `threshold_grid` and `sharpness` (non-linear models): initial thresholds tried and the
   fixed sigmoid sharpness (defaults `linspace(0, 2, 5)` and 5).
+- `n_thresholds` (`clever_fit_gainmodul`): number of initial thresholds, evenly spaced over
+  the threshold bounds (default 5, i.e. `linspace(0, 2, 5)`); an explicit `threshold_grid`
+  overrides it.
 - `n_jobs`: only used by the `"filterpy"` engine (see below).
 
 Missing stimulus categories are fine (a subject with no trial at one level simply has

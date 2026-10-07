@@ -179,6 +179,15 @@ def _bounds_for(m, bounds: dict, alias=None) -> list:
     return out
 
 
+def _threshold_inits(threshold_grid, n_thresholds, bounds) -> tuple:
+    if threshold_grid is not None:
+        return tuple(threshold_grid)
+    if isinstance(n_thresholds, bool) or not isinstance(n_thresholds, (int, np.integer)) \
+            or n_thresholds < 1:
+        raise ValueError(f"n_thresholds must be a positive integer, got {n_thresholds!r}.")
+    return tuple(np.linspace(*bounds["threshold"], int(n_thresholds)))
+
+
 def _init(m) -> list:
     return [getattr(m, p) for p in m._param_names]
 
@@ -258,14 +267,16 @@ def clever_fit_linear(state_train, input_train=None, input_start_index=None,
 
 def clever_fit_gainmodul(linear_prefitted, state_train, input_train=None, n_loops=2,
                          input_start_index=None, input_stop_index=None, *, bounds=None,
-                         threshold_grid=DEFAULT_THRESHOLD_GRID, sharpness=DEFAULT_SHARPNESS,
+                         n_thresholds=5, threshold_grid=None, sharpness=DEFAULT_SHARPNESS,
                          n_jobs=None) -> model.StratifiedGainModulationLEAD:
     """Gain-modulated model (one gain ``g`` per category), warm-started from a linear fit.
 
-    For each initial threshold in ``threshold_grid`` and two gain/weight splits,
-    alternate ``n_loops`` times between fitting each category's ``(w, g)`` pair and
-    the shared threshold; keep the best-likelihood model. The joint steps use the
-    stimulus categories only (as in LEAD). ``state_train`` must already be windowed.
+    For each of ``n_thresholds`` initial thresholds, evenly spaced over the threshold
+    bounds (default 5 over (0, 2), as in LEAD), and two gain/weight splits, alternate
+    ``n_loops`` times between fitting each category's ``(w, g)`` pair and the shared
+    threshold; keep the best-likelihood model. An explicit ``threshold_grid`` overrides
+    ``n_thresholds``. The joint steps use the stimulus categories only (as in LEAD).
+    ``state_train`` must already be windowed.
     """
     d = _prepare(state_train, input_train, input_start_index, input_stop_index)
     b, n = _merge_bounds(bounds), d.n_categories
@@ -273,7 +284,7 @@ def clever_fit_gainmodul(linear_prefitted, state_train, input_train=None, n_loop
     stim = d.stim()
 
     candidates, lls = [], []
-    for th in threshold_grid:
+    for th in _threshold_inits(threshold_grid, n_thresholds, b):
         for init_gain_index in range(2):
             gain_mult = init_gain_index / 2
             w_mult = 1 - init_gain_index / 2
