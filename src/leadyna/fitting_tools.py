@@ -24,6 +24,10 @@ the data as given.
 
 Other conventions
 -----------------
+* Baseline sequences start from the stationary distribution of the resting
+  dynamics (``BaseLEADModel.baseline_init = "stationary"``), so cutting the
+  baseline into short segments does not bias ``tau``. Wrap a call in
+  ``leadyna.use_baseline_init("observation")`` to get the LEAD initialization.
 * Category 0 is the baseline (resting / noise-only) category. This is fixed
   (``BASELINE_CATEGORY``), matching the EEG frontend's output.
 * Category keys need not be contiguous: a subject with no trial in some level

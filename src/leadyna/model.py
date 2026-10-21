@@ -22,7 +22,8 @@ def compute_ukf_loglikelihood(
     measure_noise_scalar: float,
     transition_function_factory: callable,
     n_jobs: int = 8,
-    batch_size: int = 20
+    batch_size: int = 20,
+    initial_moments: dict | None = None,
 ) -> float:
     """
     Computes the total log-likelihood for a dataset using a Parallelized Unscented Kalman Filter.
@@ -42,6 +43,10 @@ def compute_ukf_loglikelihood(
                                      This creates the model-specific physics for each category.
         n_jobs: Number of parallel jobs.
         batch_size: Number of trials per batch.
+        initial_moments: Optional dict signal_category -> (mean, variance). For these
+            categories every sequence starts from that prior and its first sample is
+            scored; other categories start at their first observation with P0 = 1,
+            the first sample not scored (LEAD behaviour).
 
     Returns:
         float: The total log-likelihood of the data given the model.
@@ -64,6 +69,7 @@ def compute_ukf_loglikelihood(
         
         # Instantiate the model dynamics for this specific category
         model_fx = transition_function_factory(signal_category)
+        prior = (initial_moments or {}).get(signal_category)
         
         batch_ll = 0.0
         
@@ -91,12 +97,18 @@ def compute_ukf_loglikelihood(
             )
 
             # Set Initial State and Covariances
-            ukf.x = np.atleast_1d(states[0])   # Initial state from observation
-            ukf.P = np.eye(UKF_DIM_X)          # Initial uncertainty (identity)
             ukf.Q = Q_matrix
             ukf.R = R_matrix
-
             trial_ll = 0.0
+            if prior is None:
+                ukf.x = np.atleast_1d(states[0])   # Initial state from observation
+                ukf.P = np.eye(UKF_DIM_X)          # Initial uncertainty (identity)
+            else:
+                ukf.x = np.atleast_1d(float(prior[0]))
+                ukf.P = np.eye(UKF_DIM_X) * float(prior[1])
+                ukf.sigmas_f = ukf.points_fn.sigma_points(ukf.x, ukf.P)
+                ukf.update(states[0])
+                trial_ll += ukf.log_likelihood
 
             # Time Step Loop
             # We start from t=1 because t=0 is the initial state
@@ -174,6 +186,7 @@ def compute_ukf_loglikelihood_fast(
     measure_noise_scalar: float,
     transition_function_factory: callable,
     vector_inputs: bool = True,
+    initial_moments: dict | None = None,
 ) -> float:
     """Same filter as :func:`compute_ukf_loglikelihood`, vectorized over trials.
 
@@ -184,7 +197,7 @@ def compute_ukf_loglikelihood_fast(
     the predicted (x, P), as the filterpy engine does, which for the identity
     observation gives a Kalman-form update. Agrees with the filterpy engine to
     ~1e-11 on the total log-likelihood, a few hundred times faster on
-    realistic data.
+    realistic data. ``initial_moments`` as in :func:`compute_ukf_loglikelihood`.
     """
     Q = process_noise_scalar**2 * dt
     R = measure_noise_scalar**2
@@ -195,9 +208,18 @@ def compute_ukf_loglikelihood_fast(
         u = np.asarray(input_series[signal_category], dtype=float)
         fx = transition_function_factory(signal_category)
         n = y.shape[0]
-        x = y[:, 0].copy()
-        P = np.ones(n)
+        prior = (initial_moments or {}).get(signal_category)
         ll = 0.0
+        if prior is None:
+            x = y[:, 0].copy()
+            P = np.ones(n)
+        else:
+            S = prior[1] + R
+            innov = y[:, 0] - prior[0]
+            ll += -0.5 * np.sum(log2pi + np.log(S) + innov**2 / S)
+            K = prior[1] / S
+            x = prior[0] + K * innov
+            P = np.full(n, prior[1] - K * K * S)
         for t in range(1, y.shape[1]):
             s = np.sqrt(P)
             f = _propagate(fx, np.concatenate((x + s, x - s)), dt,
@@ -228,9 +250,9 @@ def _check_engine(engine: str) -> str:
 def use_engine(engine: str):
     """Temporarily set the default likelihood engine of every model.
 
-    ``with use_engine("filterpy"): ...`` reproduces LEAD / SOUNDMODEL numerics
-    bit-for-bit, including inside the ``clever_fit_*`` functions, which build
-    their own models.
+    ``with use_engine("filterpy"), use_baseline_init("observation"): ...``
+    reproduces LEAD / SOUNDMODEL numerics bit-for-bit, including inside the
+    ``clever_fit_*`` functions, which build their own models.
     """
     previous = BaseLEADModel.engine
     BaseLEADModel.engine = _check_engine(engine)
@@ -238,6 +260,33 @@ def use_engine(engine: str):
         yield
     finally:
         BaseLEADModel.engine = previous
+
+
+BASELINE_INITS = ("stationary", "observation")
+
+
+def _check_baseline_init(mode: str) -> str:
+    if mode not in BASELINE_INITS:
+        raise ValueError(f"baseline_init must be one of {BASELINE_INITS}, got {mode!r}.")
+    return mode
+
+
+@contextmanager
+def use_baseline_init(mode: str):
+    """Temporarily set how every model initializes the filter on baseline sequences.
+
+    "stationary" (default): each baseline sequence starts from the stationary
+    distribution of the resting dynamics, and its first sample is scored.
+    "observation": the LEAD behaviour (start at the first observation with P0 = 1,
+    first sample not scored); with ``use_engine("filterpy")`` it reproduces
+    SOUNDMODEL bit-for-bit. Also applies inside the ``clever_fit_*`` functions.
+    """
+    previous = BaseLEADModel.baseline_init
+    BaseLEADModel.baseline_init = _check_baseline_init(mode)
+    try:
+        yield
+    finally:
+        BaseLEADModel.baseline_init = previous
 
 
 # =============================================================================
@@ -266,6 +315,17 @@ class BaseLEADModel(ABC):
     # models). A custom model whose fx only accepts a scalar u sets this to False; the
     # fast engine then groups trials by input value (slower with trial-varying inputs).
     vector_inputs = True
+    # Filter initialization on the baseline category (stratified models only):
+    # "stationary" (default) starts every baseline sequence from the stationary
+    # distribution of the resting dynamics and scores its first sample, so cutting
+    # the baseline into short segments does not bias tau; "observation" is the LEAD
+    # behaviour (x0 = first sample, P0 = 1, first sample not scored), which
+    # under-estimates tau on short segments. Set per call (baseline_init=), per model
+    # or globally (leadyna.use_baseline_init(...)). Stimulus categories always start
+    # at their first observation: their state is not at rest.
+    baseline_init = "stationary"
+    # Category holding the I = 0 baseline sequences; None for single-category models.
+    baseline_category = None
 
     def __init__(self, tau: float, process_noise: float, measure_noise: float):
         self.tau = tau
@@ -317,16 +377,60 @@ class BaseLEADModel(ABC):
         """Return a fast transition callable ``fx(x, dt, u)`` for ``category``."""
         ...
 
+    def stationary_moments(self, max_iter: int = 100000, tol: float = 1e-12):
+        """Gaussian approximation (mean, variance) of the stationary state at baseline.
+
+        Fixed point of the filter's own prediction step for the baseline category
+        with input 0 (exact for linear dynamics). Returns None when the iteration
+        does not converge (no stable resting state).
+        """
+        fx = self._make_fx(self.baseline_category)
+        Q = self.process_noise**2 * self.dt
+        a = 1.0 - self.dt / self.tau
+        m, P = 0.0, (Q / (1 - a * a) if abs(a) < 1 else Q)
+        u = np.zeros(2)
+        for _ in range(max_iter):
+            s = np.sqrt(P)
+            f = np.asarray(fx(np.array([m + s, m - s]), self.dt, u), dtype=float)
+            m_new = 0.5 * (f[0] + f[1])
+            P_new = 0.5 * ((f[0] - m_new) ** 2 + (f[1] - m_new) ** 2) + Q
+            if not (np.isfinite(m_new) and np.isfinite(P_new)):
+                return None
+            done = abs(m_new - m) < tol and abs(P_new - P) < tol * max(1.0, P_new)
+            m, P = m_new, P_new
+            if done:
+                return float(m), float(P)
+        return None
+
+    def _initial_moments(self, state_series, baseline_init):
+        mode = _check_baseline_init(baseline_init or self.baseline_init)
+        cat = self.baseline_category
+        if mode == "observation" or cat is None or cat not in state_series:
+            return None
+        moments = self.stationary_moments()
+        if moments is None:
+            warnings.warn(
+                "No stationary resting state for these parameters; the baseline "
+                "category falls back to baseline_init='observation'.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            return None
+        return {cat: moments}
+
     def loglikelihood(self, state_series, input_series=None,
-                      n_jobs: int = 8, batch_size: int = 20, engine: str | None = None) -> float:
+                      n_jobs: int = 8, batch_size: int = 20, engine: str | None = None,
+                      baseline_init: str | None = None) -> float:
         """Total UKF log-likelihood of the data under this model.
 
         Accepts either a :class:`~leadyna.datasets.LatentSeries` (whose ``dt``
         is adopted) or the legacy ``(state_series, input_series)`` dict pair.
         ``engine`` overrides ``self.engine`` ("fast" or "filterpy"); ``n_jobs``
-        and ``batch_size`` only apply to the "filterpy" engine.
+        and ``batch_size`` only apply to the "filterpy" engine. ``baseline_init``
+        overrides ``self.baseline_init`` ("stationary" or "observation").
         """
         state_series, input_series = self._resolve_series(state_series, input_series)
+        moments = self._initial_moments(state_series, baseline_init)
         if _check_engine(engine or self.engine) == "fast":
             return compute_ukf_loglikelihood_fast(
                 state_series, input_series,
@@ -335,6 +439,7 @@ class BaseLEADModel(ABC):
                 measure_noise_scalar=self.measure_noise,
                 transition_function_factory=self._make_fx,
                 vector_inputs=self.vector_inputs,
+                initial_moments=moments,
             )
         return compute_ukf_loglikelihood(
             state_series, input_series,
@@ -344,6 +449,7 @@ class BaseLEADModel(ABC):
             transition_function_factory=self._make_fx,
             n_jobs=n_jobs,
             batch_size=batch_size,
+            initial_moments=moments,
         )
 
     # --- Shared Physics "Core" ---
@@ -451,7 +557,8 @@ class BaseLEADModel(ABC):
     
     def fit(self, state_series, input_series=None,
             init_params=None, bounds=None, fixed_params=None,
-            n_jobs=None, batch_size=None, feedback: bool = False, engine=None):
+            n_jobs=None, batch_size=None, feedback: bool = False, engine=None,
+            baseline_init=None):
         """
         Maximize likelihood to fit the model parameters.
         
@@ -463,6 +570,7 @@ class BaseLEADModel(ABC):
             fixed_params: List of parameter names to keep fixed during optimization
             feedback: Whether to print optimization feedback
             engine: Likelihood engine for this fit ("fast" or "filterpy"); defaults to self.engine
+            baseline_init: "stationary" or "observation"; defaults to self.baseline_init
         """
         from scipy.optimize import minimize
 
@@ -478,6 +586,8 @@ class BaseLEADModel(ABC):
             ll_kw['batch_size'] = batch_size
         if engine is not None:
             ll_kw['engine'] = _check_engine(engine)
+        if baseline_init is not None:
+            ll_kw['baseline_init'] = _check_baseline_init(baseline_init)
         
         # Identify which parameters to optimize
         free_indices = [i for i, name in enumerate(self._param_names) if name not in fixed_params]
@@ -547,9 +657,11 @@ class LinearLEAD(BaseLEADModel):
         # Return function with signature (x, dt, u)
         return lambda x, dt_val, u: decay * x + input_gain * u
 
-    def loglikelihood_kalman(self, state_series, input_series=None) -> float:
+    def loglikelihood_kalman(self, state_series, input_series=None,
+                             baseline_init: str | None = None) -> float:
         """Exact Kalman Filter implementation (Analytical Solution for verify)."""
         state_series, input_series = self._resolve_series(state_series, input_series)
+        moments = self._initial_moments(state_series, baseline_init) or {}
         total_ll = 0.0
         A = 1 - self.dt / self.tau
         Q = self.process_noise**2 * self.dt
@@ -564,7 +676,13 @@ class LinearLEAD(BaseLEADModel):
             
             # Simple scalar Kalman Filter
             for states, inputs in zip(states_cat, inputs_cat):
-                x, P = states[0], 1.0
+                if cat in moments:
+                    m0, P0 = moments[cat]
+                    S = P0 + R
+                    total_ll += -0.5 * (np.log(2 * np.pi * S) + (states[0] - m0)**2 / S)
+                    x, P = m0 + P0 / S * (states[0] - m0), P0 - P0**2 / S
+                else:
+                    x, P = states[0], 1.0
                 
                 for t in range(1, len(states)):
                     # Predict

@@ -150,8 +150,10 @@ inputs |= {c: np.ones_like(x) for c, x in states.items() if c != 0}
 ```
 
 Every category is one 2-D array `(n_sequences, n_samples)`; sequences of different
-categories can have different lengths. Each sequence is filtered independently, so
-cutting the baseline into segments is harmless.
+categories can have different lengths. Each sequence is filtered independently, and
+every baseline sequence starts from the stationary distribution of the resting
+dynamics (see *Filter initialization on the baseline*), so cutting the baseline into
+segments only loses the correlations across the cuts: it does not bias `tau`.
 
 ### Step 3 — fit the three models and compare them
 
@@ -252,6 +254,28 @@ transition only accepts a scalar `u` sets the class attribute `vector_inputs = F
 the engine then groups trials by input value (exact, but slower when every trial has
 its own input).
 
+### Filter initialization on the baseline
+
+Every sequence of the baseline category (category 0, stratified models) starts from
+the stationary distribution of the resting dynamics (`I = 0`), and its first sample is
+scored. For the linear model this is exact (mean 0, variance `q^2 dt / (1 - a^2)`,
+`a = 1 - dt/tau`); for the non-linear models it is the fixed point of the filter's own
+prediction step (`model.stationary_moments()`). Stimulus categories always start at
+their first observation (P0 = 1, first sample not scored), since their state is not at
+rest when the window opens.
+
+LEAD started every sequence at its first observation with `P0 = 1`. On short baseline
+segments this under-estimates `tau` (about -9 % with 50-sample segments, more with
+shorter ones) and inflates the process noise and the input weights. The LEAD behaviour
+is still available:
+
+```python
+model.loglikelihood(data, baseline_init="observation")   # one call (also fit(...))
+model.baseline_init = "observation"                      # one model
+with leadyna.use_baseline_init("observation"):           # everything, clever fits included
+    linear = clever_fit_linear(train)
+```
+
 ## The core contract: `LatentSeries`
 
 The core consumes latent time-series in one validated format — a `LatentSeries`
@@ -284,8 +308,11 @@ step), which reproduces the historical numerics; with the EEG frontend's default
 - `clever_fit_*` now take **already-windowed** data. In LEAD they cut the stimulus
   window themselves with `input_start_index=75, input_stop_index=100` as defaults.
   Passing these two arguments still reproduces the LEAD behaviour (with a
-  `DeprecationWarning`); with `use_engine("filterpy")` results are bit-identical to LEAD
-  (tested, `pytest -m slow`).
+  `DeprecationWarning`); with `use_engine("filterpy")` and
+  `use_baseline_init("observation")` results are bit-identical to LEAD (tested,
+  `pytest -m slow`).
+- Baseline sequences now start from the stationary distribution (see *Filter
+  initialization on the baseline*); `baseline_init="observation"` restores LEAD.
 - The default likelihood engine is now `"fast"` (see *Likelihood engines*).
 - `STG(path, tmin, tmax)` (milliseconds, Sergent et al. 2021 conventions, dict output)
   still works but is deprecated in favour of `decode_latent` (seconds, `LatentSeries`

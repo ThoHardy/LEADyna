@@ -13,6 +13,7 @@ from .model import (
     StratifiedAffineFeedbackLEAD,
     GainModulationLEAD,
     StratifiedGainModulationLEAD,
+    use_baseline_init,
     use_engine,
 )
 
@@ -59,6 +60,7 @@ __all__ = [
     "StratifiedAffineFeedbackLEAD",
     "GainModulationLEAD",
     "StratifiedGainModulationLEAD",
+    "use_baseline_init",
     "use_engine",
     "decode_latent",
     "STG",

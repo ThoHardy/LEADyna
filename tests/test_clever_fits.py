@@ -24,7 +24,7 @@ ENGINES = ["fast", pytest.param("filterpy", marks=pytest.mark.slow)]
 def _single_process(monkeypatch):
     # LEAD code paths call loglikelihood with the filterpy default n_jobs=8; force 1 so
     # the oracle runs fast. Results do not depend on n_jobs.
-    monkeypatch.setattr(BaseLEADModel.loglikelihood, "__defaults__", (None, 1, 20, None))
+    monkeypatch.setattr(BaseLEADModel.loglikelihood, "__defaults__", (None, 1, 20, None, None))
 
 
 @pytest.fixture(scope="module")
