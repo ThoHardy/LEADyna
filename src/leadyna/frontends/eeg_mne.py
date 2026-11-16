@@ -34,7 +34,7 @@ from sklearn.preprocessing import StandardScaler
 
 from ..datasets import LatentSeries
 
-__all__ = ["decode_latent", "STG"]
+__all__ = ["decode_latent", "epochs_to_array", "STG"]
 
 BASELINE_CATEGORY = 0
 
@@ -241,6 +241,26 @@ def decode_latent(
             "frontend": "eeg_mne.decode_latent",
         },
     )
+
+
+def epochs_to_array(epochs, *, condition: str = "snr", baseline_label=0,
+                    target_sfreq: float | None = 100.0, tmin=None, tmax=None, picks="eeg"):
+    """Whole epochs as plain arrays, the input of :mod:`leadyna.coupled`.
+
+    Same conventions as :func:`decode_latent` (``baseline_label`` -> category 0, other
+    labels sorted -> 1, 2, ...; time grid brought to ``target_sfreq``), without any
+    decoding. Returns ``X`` (trials, channels, times; the units of the epochs),
+    ``cats`` (one category per trial), ``times`` (seconds) and the MNE ``info`` of
+    the kept channels (for topographies).
+    """
+    ep = _resample(_as_epochs(epochs), target_sfreq).pick(picks).crop(tmin=tmin, tmax=tmax)
+    labels = _labels(ep, condition)
+    if baseline_label not in labels:
+        raise ValueError(f"baseline_label={baseline_label!r} not found in metadata['{condition}'].")
+    stim_values = sorted(set(labels.tolist()) - {baseline_label})
+    label_to_cat = {baseline_label: BASELINE_CATEGORY, **{v: k + 1 for k, v in enumerate(stim_values)}}
+    cats = np.array([label_to_cat[v] for v in labels.tolist()])
+    return ep.get_data(), cats, ep.times.copy(), ep.info
 
 
 def STG(data_ref, tmin, tmax, decimate_factor=5, **removed):

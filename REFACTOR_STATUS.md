@@ -1,6 +1,6 @@
 # LEADyna refactor — status & resume guide
 
-*As of 2026-10-07 (Phase 3b complete: EEG frontend generalized, clever fits on windowed data, fast likelihood engine). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
+*As of 2026-11-16 (Phase 3b complete; fast engine; stationary baseline init; coupled stages added). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
 
 ## What this is
 
@@ -52,6 +52,14 @@ Turning the prototype `ThoHardy/LEAD` into **LEADyna** — a pip-installable, mo
 - [x] **Trial-varying inputs at full speed** (2026-10-07): `StratifiedGainModulationLEAD` now computes `g{int(category*u)}` element-wise over trials (`_gain_for`, also used by `nonlinearity`, which previously applied trial 0's input to every simulated trial in `measure_simulations`; out-of-range `u` now raises instead of failing on a missing attribute). The fast engine passes the input vector to `_make_fx` (`BaseLEADModel.vector_inputs = True`; custom scalar-`u` models set it to False to get the grouping fallback). Numerics unchanged (fast = filterpy to 0 on shared inputs; LEAD equivalence under filterpy re-checked).
 
 - [x] **Stationary filter initialization on the baseline** (2026-10-21): `BaseLEADModel.baseline_init = "stationary"` (default) starts every sequence of the baseline category (stratified models, `baseline_category`) from the stationary distribution of the resting dynamics and scores its first sample; `"observation"` = LEAD (x0 = y0, P0 = 1, first sample not scored). Per call (`baseline_init=` on `loglikelihood` / `fit` / `loglikelihood_kalman`), per model, or globally (`leadyna.use_baseline_init`). `model.stationary_moments()`: fixed point of the filter's prediction step (exact for linear). Both engines + exact Kalman; stimulus categories and single-category models unchanged. Motivation: parameter recovery on 200 simulated SOUNDMODEL-sized participants (Linear, 50-sample chunks + pre-stimulus) — `tau` bias −9 % with the LEAD init, ≈0 % with the stationary init, and chunks + pre-stimulus then beats the uncut rest (MAE 1.7 % vs 2.5 %). Tests: `tests/test_baseline_init.py`. **SOUNDMODEL bit-for-bit now needs `use_engine("filterpy")` + `use_baseline_init("observation")`.**
+
+- [x] **Coupled stages** (2026-11-16): new module `leadyna.coupled` (CoupledLEAD v1, developed in the SOUNDLEAD project, sub-folder `CoupledComponents`). Whole epochs → greedy-deflation patterns → GLS unmixing → time-ordered chain of 1-D stages (linear or modulated gain with `g(u) = max(0, g0 + g1 u + g2 u²)`, fitted onset and delays, demixing) → choice of K (`K_perm`, `K_elbow`). Entry points: `CoupledLEAD`, `fit_coupled`, `evaluate_K` / `select_K`, `simulate_chain`; `epochs_to_array` in the EEG frontend.
+  - **Additive**: no existing module's behaviour changed (`__init__` only registers the lazy `coupled` module; `eeg_mne` gains `epochs_to_array`). JAX is an optional extra (`pip install "leadyna[coupled]"`), imported only by `leadyna.coupled`.
+  - The stage filter is the fast engine's UKF written in JAX (exact gradients): equal to `compute_ukf_loglikelihood_fast` to 1e-8 (`tests/test_coupled.py`). The stage dynamics live in `coupled.py`; the concrete `*LEAD` classes are not reused as nodes (their gain is per category, not a function of a continuous input).
+  - Faster than the standalone v1 with the same results: pattern search ×4–5 (smoothing done once per step, BLAS covariances, no permutations after the first non-significant step), starting points and delay grid fitted in parallel threads, first-pass stage fits shared across K in `evaluate_K`.
+  - Left out on purpose (still in the SOUNDLEAD project code): the `K_r2` rule (worst rule in the benchmark), the box input kernel (never benchmarked), the fixed pattern window, pattern refinement.
+  - Tests: 5 fast + 1 slow (`pytest -m slow tests/test_coupled.py`, two-stage recovery).
+  - **Open**: not run on real data; strongly overlapping stages (K = 3) not separated; delays over-estimated by ~25 % on infant-like data → parameter recovery per group before comparing groups; summary plot not migrated.
 
 ## Environment (important lesson)
 

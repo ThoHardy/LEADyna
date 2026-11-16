@@ -157,3 +157,15 @@ def test_fit_requires_inputs(baby_like):
     latent = decode_latent(baby_like, (0.3, 0.6))
     with pytest.raises(ValueError, match="with_inputs"):
         LinearLEAD(10, 0.1, 0.1, n_categories=5).loglikelihood(latent)
+
+
+def test_epochs_to_array_conventions():
+    from leadyna.frontends.eeg_mne import epochs_to_array
+
+    labels = np.repeat([1, 3, 5], 8)                 # baseline label 1, as in SOUNDMODEL
+    ep = _toy(labels, 500.0, -0.2, 0.6, np.tile(np.arange(4), 6))
+    X, cats, times, info = epochs_to_array(ep, baseline_label=1, tmin=-0.1)
+    assert X.shape == (24, 13, len(times)) and len(info["ch_names"]) == 13
+    assert np.isclose(times[1] - times[0], 0.01) and times[0] >= -0.1
+    assert np.array_equal(cats, np.repeat([0, 1, 2], 8))
+    assert ep.info["sfreq"] == 500.0                 # input untouched

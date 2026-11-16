@@ -22,15 +22,18 @@ try:
 except PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
-# Frontends pull in optional dependencies (mne/scikit-learn for EEG, matplotlib/seaborn
-# for plotting). They are imported lazily so the core installs and imports on its own.
+# Frontends and the coupled-stage module pull in optional dependencies (mne/scikit-learn
+# for EEG, matplotlib/seaborn for plotting, JAX for leadyna.coupled). They are imported
+# lazily so the core installs and imports on its own.
 # Maps public attribute -> (relative module path, extra that provides its deps).
 _FRONTEND_MODULES = {
     "eeg_mne": (".frontends.eeg_mne", "eeg"),
     "dataprocess": (".dataprocess", "eeg"),  # deprecated alias for eeg_mne
     "visual": (".visual", "viz"),
+    "coupled": (".coupled", "coupled"),
 }
-_FRONTEND_ATTR = {"decode_latent": "eeg_mne", "STG": "eeg_mne", "colormap": "visual"}
+_FRONTEND_ATTR = {"decode_latent": "eeg_mne", "STG": "eeg_mne", "epochs_to_array": "eeg_mne",
+                  "colormap": "visual", "CoupledLEAD": "coupled"}
 
 
 def __getattr__(name):
@@ -64,7 +67,10 @@ __all__ = [
     "use_engine",
     "decode_latent",
     "STG",
+    "epochs_to_array",
     "colormap",
+    "CoupledLEAD",
+    "coupled",
     "datasets",
     "dataprocess",
     "eeg_mne",

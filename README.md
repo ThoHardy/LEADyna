@@ -18,8 +18,11 @@ pip install leadyna
 # with the EEG frontend (MNE + scikit-learn + pandas) and plotting
 pip install "leadyna[eeg,viz]"
 
+# with the coupled-stage method (JAX, CPU is enough)
+pip install "leadyna[eeg,coupled]"
+
 # development (tests, linter, notebook-output stripping)
-pip install -e ".[eeg,viz,dev]"
+pip install -e ".[eeg,viz,coupled,dev]"
 ```
 
 Python 3.11+. Install into an isolated environment (venv or conda env), not your
@@ -275,6 +278,55 @@ model.baseline_init = "observation"                      # one model
 with leadyna.use_baseline_init("observation"):           # everything, clever fits included
     linear = clever_fit_linear(train)
 ```
+
+## Coupled stages: whole epochs, no time window (`leadyna.coupled`)
+
+The tutorial above needs two hand-chosen windows: one to train the decoder, one where
+the input is assumed constant. `leadyna.coupled` removes both. It models the whole
+epoch as `x(t) = sum_k a_k z_k(t) + noise`: K stages, each with a fixed topography
+`a_k` and a 1-D latent `z_k` with LEAD dynamics. The first stage is driven by the
+stimulus through a bump with a fitted onset; each later stage is driven by the previous
+one after a fitted delay (no feedback). Everything else in LEADyna is unchanged and
+does not need JAX.
+
+```python
+from leadyna import CoupledLEAD, epochs_to_array
+
+X, cats, times, info = epochs_to_array("sub01-epo.fif", condition="snr", baseline_label=0)
+
+model = CoupledLEAD().fit(X, cats, times)    # K = number of significant deflation steps
+for stage in model.summary():                # stages in time order
+    print(stage)                             # model, tau_s, onset_s or delay_s + coupling, ...
+model.A_                                     # topographies (channels, K)
+model.latents_                               # smoothed latents (trials, K, times), rest SD = 1
+
+model.select_K(X, cats, times)               # cross-validated check: K_perm, K_elbow, ...
+```
+
+What it does (details in the module docstring and in each function):
+
+1. **Patterns** (`find_patterns`): a decoder separates the two strongest levels from
+   rest at every sample; the stimulus - rest topography around the most decodable time
+   is kept, tested against label permutations, projected out of the data, and the
+   search starts again.
+2. **Unmixing** (`unmix`): all latents are estimated jointly from the patterns (GLS
+   with the rest covariance), so one stage does not leak into another through
+   correlated topographies.
+3. **Chain** (`fit_cascade`): every stage is fitted on single trials by maximum
+   likelihood, with the same UKF as the `"fast"` engine. Each stage is *linear* or
+   *modulated gain*, `g(u) = max(0, g0 + g1*u + g2*u^2)`, chosen by BIC.
+4. **Number of stages**: `K_perm` (consecutive significant deflation steps) is the
+   recommended rule, `K_elbow` (held-out likelihood) a check. Plain maximum held-out
+   likelihood over-selects.
+
+Stage parameters are in samples (`dt = 1`); `summary()` converts times to seconds.
+Independent fits (starting points, delay grid) run in parallel threads: `n_jobs`
+(default: all cores) changes the speed, not the result. `simulate_chain` generates
+ground-truth data for parameter recovery.
+
+Status: validated on simulations only (one and two stages are recovered; strongly
+overlapping stages are not separated yet). Check parameter recovery at your own
+signal-to-noise ratio and trial count before comparing groups.
 
 ## The core contract: `LatentSeries`
 
