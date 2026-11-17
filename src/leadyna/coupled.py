@@ -573,6 +573,7 @@ class CoupledLEAD:
     >>> model.summary()                                # stages in time order
     >>> model.A_, model.latents_                       # topographies, smoothed latents
     >>> model.select_K(X, cats, times)                 # cross-validated check of K
+    >>> model.export_html("results.html", info)        # interactive 3-D viewer
 
     ``options`` are passed to :func:`fit_coupled` and :func:`evaluate_K`
     (``k_max``, ``models``, ``bounds``, ``stim_levels``, ``n_perm``, ``seed``, ``n_jobs``).
@@ -590,6 +591,12 @@ class CoupledLEAD:
         """Cross-validate K; returns the choice of each rule (see :func:`select_K`)."""
         res = evaluate_K(X, cats, times, Ks, n_folds=n_folds, verbose=verbose, **self.options)
         return select_K(res)
+
+    def export_html(self, path, info=None, **kwargs):
+        """Interactive 3-D viewer of this fit, as one HTML file (see
+        :func:`leadyna.coupled_viewer.export_html` for the options)."""
+        from .coupled_viewer import export_html
+        return export_html(self, path, info, **kwargs)
 
     def summary(self):
         """One dict per stage, in time order, with times converted to seconds."""

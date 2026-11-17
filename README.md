@@ -328,6 +328,38 @@ Status: validated on simulations only (one and two stages are recovered; strongl
 overlapping stages are not separated yet). Check parameter recovery at your own
 signal-to-noise ratio and trial count before comparing groups.
 
+### Interactive 3-D viewer of a fit
+
+`export_html` writes one standalone HTML file that you open in any browser (it needs
+an internet connection only to load three.js). It shows the patterns on the head and
+replays single trials simulated from the fitted parameters:
+
+```python
+from leadyna import CoupledLEAD, epochs_to_array, coupled_viewer
+
+epochs.set_montage("standard_1020")          # electrode positions are needed
+X, cats, times, info = epochs_to_array(epochs, condition="snr", baseline_label=0)
+model = CoupledLEAD().fit(X, cats, times)
+model.export_html("sub01_coupled.html", info, level_labels=["-13 dB", "-9 dB", "-7 dB", "-5 dB"],
+                  open_browser=True)
+
+# several K in one page (same epochs): choose the number of stages inside the page
+fits = {K: CoupledLEAD(K=K).fit(X, cats, times) for K in (1, 2, 3)}
+coupled_viewer.export_html(fits, "sub01_K123.html", info)
+
+coupled_viewer.export_demo("coupledlead_demo.html")   # the illustrative demo, no data needed
+```
+
+In the page you can rotate the head, pause or scrub time, change the stimulus
+amplitude (fitted levels are marked), scale the process and measurement noise, and,
+under "Show stages", switch each stage between its two fitted models (linear and
+modulated gain; the BIC choice is the default). Each stage's drift at rest shows
+whether it is bistable; for every bistable stage the page marks its switching
+threshold on the stimulus scale and colours trials by whether they end low or high.
+Patterns are drawn as scalp topographies interpolated between electrodes; the
+fsaverage brain inside the head is a template for orientation, not a source
+reconstruction (pass `cortex_patterns` if you have fsaverage5 source patterns).
+
 ## The core contract: `LatentSeries`
 
 The core consumes latent time-series in one validated format — a `LatentSeries`

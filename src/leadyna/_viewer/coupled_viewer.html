@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* LEADyna coupled-stage viewer. One dark world: the head is the only light object, each stage owns one
+   colour in the trajectory plot; the signal on the surface uses the MNE blue-white-red map.
+   Layout: 3-D view on the left, controls + latent trajectories on the right, transport under the view. */
+:root {
+  color-scheme: dark;
+  --bg: #0d131f;
+  --panel: #151d2c;
+  --line: #27344d;
+  --text: #e9edf5;
+  --muted: #8f9bb3;
+  --accent: #2ec4b6;
+  --font: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); display: flex; flex-direction: column; }
+header { padding: 14px 20px 8px; display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: baseline; }
+h1 { font-size: 19px; font-weight: 600; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); max-width: 72ch; }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 14px; padding: 6px 20px 16px; }
+.left, .right { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+#view { position: relative; flex: 1; min-height: 300px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #1b2538 0%, #0f1624 75%); }
+#view canvas.gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#view canvas.gl:active { cursor: grabbing; }
+.overlay { position: absolute; display: flex; gap: 6px; flex-wrap: wrap; }
+.overlay.tl { top: 10px; left: 10px; }
+.overlay.tr { top: 10px; right: 10px; }
+.hint { position: absolute; left: 12px; bottom: 10px; right: 12px; color: var(--muted); font-size: 12px; pointer-events: none; }
+.legend { position: absolute; z-index: 1; right: 12px; bottom: 50px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; pointer-events: none; text-align: right; }
+.legend .bar { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.legend .bar i { width: 110px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #053061, #2166ac, #67a9cf, #f7f7f7, #ef8a62, #b2182b, #67001f); }
+.sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 6px; vertical-align: baseline; }
+button, .seg label { font: inherit; color: var(--text); background: #1d2739; border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px; cursor: pointer; }
+button:hover, .seg label:hover { border-color: #43557a; }
+button:focus-visible, input:focus-visible + label, input[type=range]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button[aria-pressed=true], button[aria-expanded=true] { background: #2a3a58; border-color: #5a71a0; }
+.seg { display: inline-flex; align-self: flex-start; flex-wrap: wrap; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { border-radius: 0; margin-left: -1px; }
+.seg label:first-of-type { border-radius: 7px 0 0 7px; margin-left: 0; }
+.seg label:last-of-type { border-radius: 0 7px 7px 0; }
+.seg input:checked + label { background: var(--text); color: #101826; border-color: var(--text); font-weight: 600; }
+.seg input:disabled + label { opacity: 0.35; cursor: not-allowed; }
+.float { position: absolute; z-index: 3; top: 48px; padding: 10px 12px 12px; background: rgba(13, 19, 31, 0.95); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); max-height: calc(100% - 58px); overflow: auto; }
+.float[hidden] { display: none; }
+.float .head { cursor: move; touch-action: none; display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; }
+.float h2 { font-size: 14px; margin: 0; font-weight: 600; }
+.float h2 span { color: var(--muted); font-weight: 400; }
+.float .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+#patterns { left: 10px; width: min(440px, calc(50% - 15px)); }
+#stagesBox { right: 10px; width: min(400px, calc(50% - 15px)); }
+@media (max-width: 900px) { #patterns, #stagesBox { width: calc(100% - 20px); } }
+#patCanvas { width: 100%; aspect-ratio: 3 / 1.05; display: block; border-radius: 6px; }
+#patLabels { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; text-align: center; font-size: 12px; margin-top: 4px; }
+#presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+#presets button { font-size: 12px; padding: 4px 9px; }
+.stageRow { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 3px 10px; padding: 7px 0; border-top: 1px solid var(--line); }
+.stageRow h3 { grid-column: 1 / -1; margin: 0; font-size: 13px; font-weight: 600; }
+.stageRow canvas { width: 104px; height: 56px; display: block; border-radius: 5px; background: #111a28; }
+.stageRow .seg label { font-size: 12px; padding: 3px 8px; }
+.stageRow .params { font: 10.5px/1.45 var(--mono); color: var(--muted); margin-top: 3px; }
+.stageRow .verdict { font-size: 12px; margin-top: 3px; }
+.bic { font: 10px var(--mono); color: var(--muted); margin-left: 6px; }
+#transport { display: flex; align-items: center; gap: 10px; padding: 8px 12px; flex-wrap: wrap; }
+#transport input[type=range] { flex: 1; min-width: 140px; }
+#tLabel { font-family: var(--mono); min-width: 9ch; text-align: right; font-variant-numeric: tabular-nums; }
+#controls { padding: 12px 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
+.ctl { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ctl > span:not(.seg), .ctl > label { color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+.ctl output { font-family: var(--mono); color: var(--text); font-variant-numeric: tabular-nums; }
+.ctl.wide { grid-column: 1 / -1; }
+input[type=range] { width: 100%; accent-color: var(--text); margin: 0; }
+.marked { position: relative; padding: 0 0 4px; }
+.ticks { position: relative; height: 0; }
+.tick { position: absolute; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; pointer-events: none; white-space: nowrap; font: 10px var(--mono); }
+.tick i { width: 2px; border-radius: 1px; }
+.ticks.up { height: 18px; }
+.ticks.up .tick { bottom: 0; flex-direction: column-reverse; color: var(--muted); }
+.ticks.up .tick i { height: 7px; background: var(--muted); }
+.ticks.down .tick i { height: 16px; }
+#plotWrap { flex: 1; min-height: 260px; padding: 8px 10px 6px; display: flex; flex-direction: column; gap: 4px; }
+#plot { flex: 1; min-height: 0; width: 100%; display: block; cursor: ew-resize; touch-action: none; }
+#plotNote { color: var(--muted); font-size: 12px; margin: 0 4px 2px; min-height: 2.9em; }
+#tally { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+footer { padding: 0 20px 12px; color: var(--muted); font-size: 12px; }
+@media (max-width: 900px) {
+  html, body { height: auto; }
+  main { grid-template-columns: minmax(0, 1fr); }
+  #view { min-height: 380px; flex: none; height: 70vw; max-height: 520px; }
+  #plotWrap { height: 440px; flex: none; }
+}
+@media (max-width: 480px) { #controls { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <p id="subtitle"></p>
+</header>
+
+<main>
+  <section class="left">
+    <div id="view" class="panel">
+      <canvas id="gl" class="gl" aria-label="3-D view. Drag to rotate, scroll to zoom."></canvas>
+      <div class="overlay tl">
+        <button id="patBtn" type="button" aria-expanded="false" aria-controls="patterns">Show patterns</button>
+        <button id="stgBtn" type="button" aria-expanded="false" aria-controls="stagesBox">Show stages</button>
+      </div>
+      <div class="overlay tr">
+        <button type="button" data-view="left">Left</button>
+        <button type="button" data-view="top">Top</button>
+        <button type="button" data-view="front">Front</button>
+        <button id="spinBtn" type="button" aria-pressed="false">Spin</button>
+      </div>
+      <div id="patterns" class="panel float" hidden>
+        <div class="head">
+          <h2>Patterns a<sub>k</sub>: fixed over the whole epoch <span>(drag me)</span></h2>
+          <button class="close" type="button" aria-label="Close patterns window">Close</button>
+        </div>
+        <canvas id="patCanvas"></canvas>
+        <div id="patLabels"></div>
+        <p class="note" id="patNote"></p>
+      </div>
+      <div id="stagesBox" class="panel float" hidden>
+        <div class="head">
+          <h2>Stage models <span>(drag me)</span></h2>
+          <button class="close" type="button" aria-label="Close stages window">Close</button>
+        </div>
+        <div id="presets"></div>
+        <div id="stageRows"></div>
+        <p class="note">Curve: drift dz/dt of the stage at rest (no input). Filled dots: stable states, open dot: unstable state.</p>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div class="hint" id="hint"></div>
+    </div>
+    <div id="transport" class="panel">
+      <button id="playBtn" type="button" aria-pressed="true">Pause</button>
+      <button id="newBtn" type="button">New trial</button>
+      <input id="time" type="range" min="0" max="1" step="0.1" value="0" aria-label="Time in the epoch">
+      <span id="tLabel">0 ms</span>
+      <span class="seg" role="group" aria-label="Playback speed">
+        <input type="radio" name="speed" id="sp1" value="0.5"><label for="sp1">&frac12;&times;</label>
+        <input type="radio" name="speed" id="sp2" value="1" checked><label for="sp2">1&times;</label>
+        <input type="radio" name="speed" id="sp3" value="2"><label for="sp3">2&times;</label>
+      </span>
+    </div>
+  </section>
+
+  <section class="right">
+    <div id="controls" class="panel">
+      <div class="ctl">
+        <span>Number of stages</span>
+        <span class="seg" role="group" aria-label="Number of stages" id="kSeg"></span>
+      </div>
+      <div class="ctl">
+        <label for="stim"><span id="stimName">Stimulus strength</span> <output id="stimOut"></output></label>
+        <div class="marked">
+          <div class="ticks up" id="levelTicks"></div>
+          <input id="stim" type="range" min="0" max="1" step="0.005" value="0.5">
+          <div class="ticks down" id="switchTicks"></div>
+        </div>
+      </div>
+      <div class="ctl">
+        <label for="pn">Process noise <output id="pnOut"></output></label>
+        <input id="pn" type="range" min="0" max="3" step="0.1" value="1">
+      </div>
+      <div class="ctl">
+        <label for="mn">Measurement noise <output id="mnOut"></output></label>
+        <input id="mn" type="range" min="0" max="3" step="0.1" value="1">
+      </div>
+      <div class="ctl wide">
+        <span>Looping</span>
+        <span class="seg" role="group" aria-label="Looping">
+          <input type="radio" name="loop" id="lp1" value="new" checked><label for="lp1">New trial each loop</label>
+          <input type="radio" name="loop" id="lp2" value="same"><label for="lp2">Same trial</label>
+        </span>
+      </div>
+    </div>
+    <div id="plotWrap" class="panel">
+      <canvas id="plot" aria-label="Latent trajectory of each stage. Click or drag to choose a time."></canvas>
+      <p id="plotNote"></p>
+      <div id="tally"></div>
+    </div>
+  </section>
+</main>
+<footer id="footer"></footer>
+
+<script>window.SPEC = __SPEC__;</script>
+<script>window.BRAIN = __BRAIN__;</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+const SPEC = window.SPEC, BRAIN = window.BRAIN;
+const $ = id => document.getElementById(id);
+if (typeof THREE === "undefined") {
+  document.body.innerHTML = '<p style="padding:24px">This viewer loads three.js from cdnjs.cloudflare.com. Connect to the internet and reload.</p>';
+  throw new Error("three.js not loaded");
+}
+$("title").textContent = SPEC.title; $("subtitle").textContent = SPEC.subtitle || ""; $("footer").textContent = SPEC.footer || "";
+document.title = SPEC.title;
+
+// ================================================================ model
+// Stage dynamics, as in leadyna.coupled (time in samples, latent in rest-SD units):
+//   z[t+1] = z[t] - z[t]/tau + w*u[t] + max(0, g0 + g1*u + g2*u^2) * sigmoid(5*(z[t] - threshold)) + q*eps
+//   first stage: u = A * bump(t - t0; onset, scale), w = 1;  later stage: u = parent(t - delay), w = coupling.
+//   readout: y = z + r*eta.  Each trial starts from the stationary spread of the linear part.
+const N = SPEC.n_times, T0 = SPEC.t0, DT_MS = SPEC.dt_ms, SHARP = 5, N_FAN = 40;
+const MODEL_LABEL = { linear: "linear", modulated_gain: "modulated gain" };
+const COLORS = ["#2ec4b6", "#a78bfa", "#ff9f1c", "#f472b6", "#60a5fa"], LOW = "#7f93c4";
+
+function rng(seed) {                                    // mulberry32 + Box-Muller
+  let a = seed >>> 0;
+  const u = () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  return () => Math.sqrt(-2 * Math.log(u() + 1e-12)) * Math.cos(6.283185307 * u());
+}
+const sigmoid = x => 1 / (1 + Math.exp(-x));
+const bump = (i, onset, scale) => { const x = (i - T0 - onset) / scale; return x > 0 ? x * x / 4 * Math.exp(2 - x) : 0; };
+
+const state = { cfg: SPEC.default_config || 0, stim: 0.5, pn: 1, mn: 1, loop: "new", speed: 1,
+                playing: true, scrubbing: false, t: 0, trial: 1, spin: false,
+                models: SPEC.configs.map(c => c.stages.map(s => s.default || s.chosen || Object.keys(s.models)[0])) };
+const cfg = () => SPEC.configs[state.cfg];
+const chain = () => cfg().stages;
+const modelOf = p => state.models[state.cfg][p];
+function params(p) {                                    // parameters of stage p under the current model choice
+  const s = chain()[p], m = s.models[modelOf(p)], out = { ...m };
+  if (p > 0 && typeof m.coupling === "object") out.coupling = m.coupling[modelOf(p - 1)];
+  if (!(modelOf(p) === "modulated_gain")) { out.g0 = out.g1 = out.g2 = 0; out.threshold = 0; }
+  out.g1 = out.g1 || 0; out.g2 = out.g2 || 0;
+  return out;
+}
+const stimAmp = s => s * SPEC.stimulus.max_amp;
+
+function simulate(seed, s = state.stim, pnMult = state.pn) {
+  const st = chain(), z = [], eta = [], A = stimAmp(s);
+  st.forEach((_, p) => {
+    const P = params(p), g = rng(seed * 16 + p + 1), q = P.process_noise * pnMult, a = 1 - 1 / P.tau, zs = new Float32Array(N);
+    const gain = modelOf(p) === "modulated_gain";
+    zs[0] = g() * q / Math.sqrt(Math.max(1 - a * a, 1e-3));
+    for (let i = 0; i < N - 1; i++) {
+      let u, w;
+      if (p === 0) { u = A * bump(i, P.onset, P.scale); w = 1; }
+      else {
+        const x = i - P.delay, i0 = Math.floor(x), f = x - i0, par = z[p - 1];
+        const at = k => (k >= 0 && k < N ? par[k] : 0);
+        u = (1 - f) * at(i0) + f * at(i0 + 1); w = P.coupling;
+      }
+      const fb = gain ? Math.max(0, P.g0 + P.g1 * u + P.g2 * u * u) * sigmoid(SHARP * (zs[i] - P.threshold)) : 0;
+      zs[i + 1] = zs[i] - zs[i] / P.tau + w * u + fb + q * g();
+    }
+    z.push(zs);
+    const h = rng(seed * 16 + 9 + p), e = new Float32Array(N);
+    for (let i = 0; i < N; i++) e[i] = h();
+    eta.push(e);
+  });
+  return { seed, z, eta };
+}
+const endValue = zs => { let m = 0; for (let i = N - 20; i < N; i++) m += zs[i]; return m / 20; };
+const lerpZ = (zs, t) => { const i = Math.min(N - 1, Math.floor(t)), j = Math.min(N - 1, i + 1); return zs[i] + (zs[j] - zs[i]) * (t - i); };
+
+// Fixed points of a stage at rest (u = 0): zeros of F(z) = -z/tau + max(0, g0) * sigmoid(5 (z - threshold)).
+function restDrift(P, gain) { return z => -z / P.tau + (gain ? Math.max(0, P.g0) * sigmoid(SHARP * (z - P.threshold)) : 0); }
+function fixedPoints(p) {
+  const P = params(p), F = restDrift(P, modelOf(p) === "modulated_gain");
+  const hi = Math.max(8, P.tau * Math.max(0, P.g0) + 4), step = (hi + 6) / 6000, roots = [];
+  for (let z = -6; z < hi; z += step) if (F(z) === 0 || F(z) * F(z + step) < 0) {
+    const r = z + step / 2; roots.push({ z: r, stable: (F(r + 1e-4) - F(r - 1e-4)) < 0 });
+  }
+  return roots;
+}
+
+// Per-chain quantities that do not depend on the noise or stimulus sliders.
+let D = null;
+function derive() {
+  const st = chain(), K = st.length;
+  const fp = st.map((_, p) => fixedPoints(p));
+  const bistable = fp.map(r => r.length === 3 && r[0].stable && r[2].stable);
+  const unstable = fp.map((r, p) => bistable[p] ? r[1].z : null);
+  const colourBy = st.map((_, p) => { for (let k = p; k >= 0; k--) if (bistable[k]) return k; return null; });
+  const lv = (SPEC.stimulus.levels || []).map((_, i) => (params(0)[`amp${i + 1}`] || 0) / SPEC.stimulus.max_amp);
+  const top = simulate(1, lv.length ? Math.max(...lv) : 1, 0), range = [], zref = [];   // strongest fitted level
+  st.forEach((_, p) => {
+    const P = params(p), a = 1 - 1 / P.tau, sd = P.process_noise / Math.sqrt(Math.max(1 - a * a, 1e-3));
+    let lo = 0, hi = 0;
+    for (const v of top.z[p]) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    for (const r of fp[p]) if (r.z < 60) hi = Math.max(hi, r.z);
+    range.push([Math.min(-2, lo - 2.5 * sd), Math.max(4, hi + 2.5 * sd + 0.6)]);
+    zref.push(Math.max(1.2, 0.8 * Math.max(hi, -lo)));
+  });
+  // Switching threshold of a bistable stage: lowest stimulus above which the noise-free stage ends high.
+  const switching = st.map((_, p) => {
+    if (!bistable[p]) return null;
+    const high = s => endValue(simulate(1, s, 0).z[p]) > unstable[p];
+    if (!high(1)) return null;
+    let lo = 0, hi = 1;
+    for (let k = 0; k < 22; k++) { const m = (lo + hi) / 2; high(m) ? hi = m : lo = m; }
+    return hi;
+  });
+  D = { K, fp, bistable, unstable, colourBy, range, zref, switching };
+}
+
+let trial = null, fan = [];
+function restart(keepTime) {
+  trial = simulate(state.trial);
+  fan = []; for (let j = 0; j < N_FAN; j++) fan.push(simulate(5000 + j).z);
+  if (!keepTime) state.t = 0;
+  dirty = true;
+}
+function nextTrial() {
+  fan.push(trial.z); if (fan.length > N_FAN + 20) fan.shift();
+  state.trial++; trial = simulate(state.trial); dirty = true;
+}
+const endsHigh = (zs, p) => D.bistable[p] && endValue(zs[p]) > D.unstable[p];
+
+// ================================================================ surfaces
+const b64 = (str, Type) => { const bin = atob(str), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return new Type(u8.buffer); };
+const UNIT = 75, BRAIN_CENTRE = [0, -18, 15];
+// mm (x right, y anterior, z up) -> scene (x, z, -y) / UNIT
+const toScene = (p, c) => [(p[0] - c[0]) / UNIT, (p[2] - c[2]) / UNIT, -(p[1] - c[1]) / UNIT];
+const MM = b64(BRAIN.pos, Int16Array), SULC = b64(BRAIN.sulc, Int8Array), NVB = SULC.length;
+const mmB = i => [MM[3 * i] / 256, MM[3 * i + 1] / 256, MM[3 * i + 2] / 256];
+const brainGeo = new THREE.BufferGeometry(), brainShade = new Float32Array(NVB);
+{ const xyz = new Float32Array(NVB * 3);
+  for (let i = 0; i < NVB; i++) { xyz.set(toScene(mmB(i), BRAIN_CENTRE), 3 * i); brainShade[i] = 0.60 - 0.24 * Math.tanh(SULC[i] / 45); }
+  brainGeo.setAttribute("position", new THREE.BufferAttribute(xyz, 3));
+  brainGeo.setIndex(new THREE.BufferAttribute(b64(BRAIN.faces, Uint16Array), 1));
+  brainGeo.computeVertexNormals(); }
+
+const SCALP = SPEC.surface.kind === "scalp";
+let surf;                                                 // { geo, nv, shade, coverage, patterns[], blobs }
+if (!SCALP) {
+  const pats = SPEC.patterns.map(pt => {
+    const a = new Float32Array(NVB);
+    if (pt.blobs) {
+      const { sd, at } = pt.blobs;
+      for (let i = 0; i < NVB; i++) {
+        const p = mmB(i), side = i < BRAIN.nLeft ? -1 : 1;
+        for (const c of at) a[i] += Math.exp(-((p[0] - side * c[0]) ** 2 + (p[1] - c[1]) ** 2 + (p[2] - c[2]) ** 2) / (2 * sd * sd));
+      }
+    } else a.set(pt.values);
+    let m = 0; for (const v of a) m = Math.max(m, Math.abs(v));
+    for (let i = 0; i < NVB; i++) a[i] /= m || 1;
+    return a;
+  });
+  surf = { geo: brainGeo, nv: NVB, shade: brainShade, coverage: null, patterns: pats, pos: i => mmB(i), blobWidth: 450 };
+} else {
+  // Scalp: sphere fitted to the electrodes; channel values spread over it with a Gaussian kernel in angle.
+  const E = SPEC.surface.pos, nE = E.length;
+  const M = [], b = [];
+  for (const p of E) { M.push([2 * p[0], 2 * p[1], 2 * p[2], 1]); b.push(p[0] ** 2 + p[1] ** 2 + p[2] ** 2); }
+  const MtM = [0, 1, 2, 3].map(i => [0, 1, 2, 3].map(j => M.reduce((s, r) => s + r[i] * r[j], 0)));
+  const Mtb = [0, 1, 2, 3].map(i => M.reduce((s, r, k) => s + r[i] * b[k], 0));
+  const sol = (() => { const A = MtM.map((r, i) => [...r, Mtb[i]]);
+    for (let i = 0; i < 4; i++) { let m = i; for (let k = i + 1; k < 4; k++) if (Math.abs(A[k][i]) > Math.abs(A[m][i])) m = k; [A[i], A[m]] = [A[m], A[i]];
+      for (let k = 0; k < 4; k++) if (k !== i) { const f = A[k][i] / A[i][i]; for (let j = i; j < 5; j++) A[k][j] -= f * A[i][j]; } }
+    return A.map((r, i) => r[4] / r[i]); })();
+  const C = sol.slice(0, 3), R = Math.sqrt(sol[3] + C[0] ** 2 + C[1] ** 2 + C[2] ** 2);
+  const dirs = E.map(p => { const v = [p[0] - C[0], p[1] - C[1], p[2] - C[2]], n = Math.hypot(...v); return v.map(x => x / n); });
+  const ang = (u, v) => Math.acos(Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1] + u[2] * v[2])));
+  const nn = dirs.map((d, i) => Math.min(...dirs.map((e, j) => (i === j ? 9 : ang(d, e))))).sort((x, y) => x - y);
+  const sigma = Math.max(0.08, nn[Math.floor(nn.length / 2)]);
+  const axis = (() => { const m = [0, 1, 2].map(k => dirs.reduce((s, d) => s + d[k], 0)); const n = Math.hypot(...m); return m.map(x => x / n); })();
+  const capEdge = Math.min(Math.PI, Math.max(...dirs.map(d => ang(d, axis))) + 0.45 * sigma);   // round cap just past the last electrodes
+  // spherical cap around the electrode axis (scene coordinates), so that its edge is a smooth circle
+  const g = new THREE.SphereGeometry(R / UNIT, 160, 90, 0, 2 * Math.PI, 0, capEdge);
+  g.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...toScene(axis, [0, 0, 0])).normalize())));
+  const P = g.attributes.position, nv = P.count;
+  const vdir = [], coverage = new Float32Array(nv), W = new Float32Array(nv * nE);
+  for (let i = 0; i < nv; i++) {
+    // sphere is built around the scene y axis: scene (x, y, z) = head (x, z, -y)
+    const d = [P.getX(i), -P.getZ(i), P.getY(i)].map(x => x * UNIT / R);
+    vdir.push(d);
+    let near = 9, sw = 0;
+    for (let j = 0; j < nE; j++) { const t = ang(d, dirs[j]); near = Math.min(near, t); const w = Math.exp(-0.5 * (t / sigma) ** 2); W[i * nE + j] = w; sw += w; }
+    for (let j = 0; j < nE; j++) W[i * nE + j] /= sw + 1e-9;
+    coverage[i] = Math.min(1, Math.max(0, (capEdge - ang(d, axis)) / (0.45 * sigma)));
+  }
+  g.computeVertexNormals();
+  const pats = SPEC.patterns.map(pt => {
+    const vals = pt.values; let m = 0; for (const v of vals) m = Math.max(m, Math.abs(v));
+    const a = new Float32Array(nv);
+    let most = 0;
+    for (let i = 0; i < nv; i++) { let s = 0; for (let j = 0; j < nE; j++) s += W[i * nE + j] * vals[j]; a[i] = s; if (coverage[i] > 0.5) most = Math.max(most, Math.abs(s)); }
+    for (let i = 0; i < nv; i++) a[i] /= most || m || 1;
+    return a;
+  });
+  const shade = new Float32Array(nv).fill(0.58);
+  surf = { geo: g, nv, shade, coverage, patterns: pats, centre: C, radius: R, electrodes: E,
+           pos: i => vdir[i].map(x => x * 100), blobWidth: 1100 };
+}
+const NV = surf.nv;
+const N_BLOB = 60, BLOBS = new Float32Array(N_BLOB * NV);  // measurement noise: smooth blobs redrawn every sample
+{ const g = rng(11), w = surf.blobWidth;
+  for (let j = 0; j < N_BLOB; j++) {
+    const c = surf.pos(Math.floor(Math.abs(g()) * 7919 * (j + 1)) % NV);
+    for (let i = 0; i < NV; i++) { const p = surf.pos(i); BLOBS[j * NV + i] = Math.exp(-((p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2 + (p[2] - c[2]) ** 2) / w); }
+  } }
+
+// ================================================================ 3-D scenes
+const RDBU = [[-1, 5, 48, 97], [-0.6, 33, 102, 172], [-0.3, 103, 169, 207], [0, 247, 247, 247], [0.3, 239, 138, 98], [0.6, 178, 24, 43], [1, 103, 0, 31]];
+function rdbu(v, out) {                                  // RdBu_r, the MNE default for topographies; v in [-1, 1]
+  v = Math.max(-1, Math.min(1, v));
+  let k = 1; while (v > RDBU[k][0]) k++;
+  const a = RDBU[k - 1], b = RDBU[k], f = (v - a[0]) / (b[0] - a[0]);
+  for (let c = 0; c < 3; c++) out[c] = (a[c + 1] + (b[c + 1] - a[c + 1]) * f) / 255;
+}
+function makeScene(canvas) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x6a7694, 0.62));
+  const key = new THREE.DirectionalLight(0xffffff, 0.5); key.position.set(-1.5, 2, 3);
+  camera.add(key); scene.add(camera);
+  return { renderer, scene, camera };
+}
+function surfaceMesh() {
+  const g = surf.geo.clone();
+  g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(NV * 3), 3));
+  return new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0, side: SCALP ? THREE.DoubleSide : THREE.FrontSide }));
+}
+function hindbrain() {                                   // cerebellum + brainstem (schematic), never coloured
+  const grp = new THREE.Group(), mat = new THREE.MeshStandardMaterial({ color: 0x8d8d8d, roughness: 0.9 });
+  const cg = new THREE.SphereGeometry(1, 72, 56), cp = cg.attributes.position;
+  for (let i = 0; i < cp.count; i++) {
+    const x = cp.getX(i), y = cp.getY(i), z = cp.getZ(i), r = 1 + 0.018 * Math.sin(y * 46 + 3 * z * z) - 0.10 * Math.exp(-((x / 0.09) ** 2));
+    cp.setXYZ(i, x * 0.66 * r, y * 0.33 * r, z * 0.42 * r);
+  }
+  cg.computeVertexNormals();
+  const cb = new THREE.Mesh(cg, mat); cb.position.set(0, -0.60, 0.60); cb.rotation.x = 0.25; grp.add(cb);
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.10, 0.46, 28), mat);
+  stem.position.set(0, -0.74, 0.22); stem.rotation.x = 0.30; grp.add(stem);
+  return grp;
+}
+function greyBrain() {                                    // scalp mode: template brain inside the head, for orientation
+  const grp = new THREE.Group();
+  const m = new THREE.Mesh(brainGeo, new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.85 }));
+  grp.add(m, hindbrain());
+  const s = Math.min(1.3, Math.max(0.5, 0.8 * surf.radius / 92));    // fsaverage half-length front-back ~ 90 mm
+  grp.scale.setScalar(s); grp.position.set(0, -0.22 * surf.radius / UNIT, 0);
+  return grp;
+}
+function electrodes() {
+  const grp = new THREE.Group(), geo = new THREE.SphereGeometry(0.022, 10, 8), mat = new THREE.MeshStandardMaterial({ color: 0x1d2739, roughness: 0.6 });
+  for (const p of surf.electrodes) {
+    const v = [p[0] - surf.centre[0], p[1] - surf.centre[1], p[2] - surf.centre[2]], n = Math.hypot(...v), r = surf.radius * 1.01;
+    const m = new THREE.Mesh(geo, mat); m.position.set(...toScene(v.map(x => x / n * r), [0, 0, 0])); grp.add(m);
+  }
+  return grp;
+}
+const tmp = [0, 0, 0], field = new Float32Array(NV);
+function paint(mesh, weights, noiseSeed, noiseAmp) {     // weights: [[pattern index, latent / reference], ...]
+  const col = mesh.geometry.attributes.color.array, cov = surf.coverage;
+  field.fill(0);
+  if (noiseAmp > 0) {
+    const g = rng(noiseSeed);
+    for (let j = 0; j < N_BLOB; j++) { const w = g() * 0.22 * noiseAmp, o = j * NV; for (let i = 0; i < NV; i++) field[i] += w * BLOBS[o + i]; }
+  }
+  for (const [k, w] of weights) { const a = surf.patterns[k]; for (let i = 0; i < NV; i++) field[i] += a[i] * w; }
+  for (let i = 0; i < NV; i++) {
+    const c = cov ? cov[i] : 1, v = 0.85 * field[i], sh = surf.shade[i] * (cov ? 0.7 + 0.3 * c : 1);
+    const alpha = c * Math.min(1, Math.max(0, (Math.abs(v) - 0.05) / 0.2));
+    rdbu(v, tmp);
+    const lit = 0.62 + 0.45 * sh;
+    for (let q = 0; q < 3; q++) col[3 * i + q] = sh + (tmp[q] * lit - sh) * alpha;
+  }
+  mesh.geometry.attributes.color.needsUpdate = true;
+}
+
+const main = makeScene($("gl"));
+const head = surfaceMesh(); main.scene.add(head);
+if (SCALP) main.scene.add(greyBrain(), electrodes()); else main.scene.add(hindbrain());
+const pat = makeScene($("patCanvas"));
+const patMeshes = SPEC.patterns.map((_, k) => { const m = surfaceMesh(); paint(m, [[k, 1]], 0, 0); m.visible = false; pat.scene.add(m); return m; });
+if (SCALP) pat.scene.add(electrodes()); else pat.scene.add(hindbrain());
+$("hint").textContent = SCALP
+  ? "Drag to rotate, scroll to zoom. Colour = signal on the scalp (blue negative, red positive); dots = electrodes; mottling = measurement noise."
+  : "Drag to rotate, scroll to zoom. Colour = signal on the cortex, blue negative to red positive. Faint mottling = measurement noise.";
+
+const orbit = { theta: -2.15, phi: 1.15, radius: SCALP ? 6.2 : 5.6 };
+const VIEWS = { left: [-Math.PI / 2, Math.PI / 2], top: [0, 0.02], front: [Math.PI, 1.45] };
+function placeCamera(cam) {
+  const { theta, phi, radius } = orbit;
+  cam.position.set(radius * Math.sin(phi) * Math.sin(theta), radius * Math.cos(phi) - 0.05, radius * Math.sin(phi) * Math.cos(theta));
+  cam.lookAt(0, -0.05, 0);
+}
+const glCanvas = main.renderer.domElement;
+let drag = null;
+glCanvas.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY }; glCanvas.setPointerCapture(e.pointerId); setSpin(false); });
+glCanvas.addEventListener("pointermove", e => {
+  if (!drag) return;
+  orbit.theta -= (e.clientX - drag.x) * 0.008;
+  orbit.phi = Math.min(Math.PI - 0.02, Math.max(0.02, orbit.phi - (e.clientY - drag.y) * 0.008));
+  drag = { x: e.clientX, y: e.clientY };
+});
+glCanvas.addEventListener("pointerup", () => { drag = null; });
+glCanvas.addEventListener("wheel", e => { e.preventDefault(); orbit.radius = Math.min(10, Math.max(2.6, orbit.radius * (1 + e.deltaY * 0.001))); }, { passive: false });
+document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => { [orbit.theta, orbit.phi] = VIEWS[b.dataset.view]; setSpin(false); }));
+function setSpin(on) { state.spin = on; $("spinBtn").setAttribute("aria-pressed", on); }
+$("spinBtn").addEventListener("click", () => setSpin(!state.spin));
+function fit(sc, el) {
+  const w = el.clientWidth, h = el.clientHeight;
+  if (!w || !h) return;
+  sc.renderer.setSize(w, h, false); sc.camera.aspect = w / h; sc.camera.updateProjectionMatrix();
+}
+new ResizeObserver(() => { fit(main, $("view")); dirty = true; }).observe($("view"));
+
+// ================================================================ floating windows
+function floating(box, btn, showText, hideText, onOpen) {
+  const set = open => { box.hidden = !open; btn.setAttribute("aria-expanded", open); btn.textContent = open ? hideText : showText; if (open && onOpen) onOpen(); };
+  btn.addEventListener("click", () => set(box.hidden));
+  box.querySelector(".close").addEventListener("click", () => set(false));
+  const hd = box.querySelector(".head"); let d = null;
+  hd.addEventListener("pointerdown", e => {
+    if (e.target.closest("button")) return;
+    d = { x: e.clientX - box.offsetLeft, y: e.clientY - box.offsetTop }; hd.setPointerCapture(e.pointerId);
+  });
+  hd.addEventListener("pointermove", e => {
+    if (!d) return;
+    const v = $("view");
+    box.style.right = "auto";
+    box.style.left = Math.max(0, Math.min(v.clientWidth - 80, e.clientX - d.x)) + "px";
+    box.style.top = Math.max(0, Math.min(v.clientHeight - 40, e.clientY - d.y)) + "px";
+  });
+  hd.addEventListener("pointerup", () => { d = null; });
+  return set;
+}
+const patBox = $("patterns"), stgBox = $("stagesBox");
+const setPatterns = floating(patBox, $("patBtn"), "Show patterns", "Hide patterns", describePatterns);
+const setStages = floating(stgBox, $("stgBtn"), "Show stages", "Hide stages", buildStages);
+
+const stageTitle = (p, withModel) => {
+  const s = chain()[p];
+  return `Stage ${p + 1}` + (s.name ? ` · ${s.name}` : "") + (s.region ? ` (${s.region})` : "") + (withModel ? ` · ${MODEL_LABEL[modelOf(p)]}` : "");
+};
+const stageColour = p => chain()[p].color || COLORS[p % COLORS.length];
+function describePatterns() {
+  $("patLabels").innerHTML = chain().map((s, p) => `<span style="color:${stageColour(p)}">Stage ${p + 1}${s.region ? " &middot; " + s.region : ""}</span>`).join("");
+  $("patNote").textContent = (SPEC.pattern_note ? SPEC.pattern_note + " " : "") + "The window turns with the main view.";
+}
+function renderPatterns() {
+  const c = pat.renderer.domElement, w = c.clientWidth, h = c.clientHeight, st = chain();
+  if (!w || !h) return;
+  pat.renderer.setSize(w, h, false); pat.renderer.setScissorTest(true);
+  placeCamera(pat.camera);
+  const tile = w / st.length;
+  pat.camera.aspect = tile / h; pat.camera.updateProjectionMatrix();
+  st.forEach((s, p) => {
+    patMeshes.forEach((m, k) => { m.visible = k === s.pattern; });
+    pat.renderer.setViewport(p * tile, 0, tile, h); pat.renderer.setScissor(p * tile, 0, tile, h);
+    pat.renderer.render(pat.scene, pat.camera);
+  });
+}
+
+// Stage window: model per stage, drift at rest, parameters; presets on top.
+const fmt = (v, d = 2) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(d));
+function buildStages() {
+  const c = cfg(), presets = c.presets || [];
+  $("presets").innerHTML = presets.map((pr, i) => `<button type="button" data-preset="${i}">${pr.label}</button>`).join("");
+  $("presets").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    state.models[state.cfg] = [...presets[+b.dataset.preset].models]; changed();
+  }));
+  $("stageRows").innerHTML = c.stages.map((s, p) => {
+    const opts = ["linear", "modulated_gain"].map(m => {
+      const id = `m${p}_${m}`, has = m in s.models;
+      return `<input type="radio" name="m${p}" id="${id}" value="${m}" ${modelOf(p) === m ? "checked" : ""} ${has ? "" : "disabled"}>`
+        + `<label for="${id}">${MODEL_LABEL[m]}${s.bic_chosen === m ? '<span class="bic">BIC</span>' : ""}</label>`;
+    }).join("");
+    return `<div class="stageRow"><h3 style="color:${stageColour(p)}">${stageTitle(p, false)}</h3>
+      <canvas id="drift${p}" width="264" height="140"></canvas>
+      <div><span class="seg" role="group" aria-label="Model of stage ${p + 1}">${opts}</span>
+      <div class="verdict" id="verdict${p}"></div><div class="params" id="params${p}"></div></div></div>`;
+  }).join("");
+  c.stages.forEach((_, p) => document.querySelectorAll(`input[name=m${p}]`).forEach(el => el.addEventListener("change", () => {
+    state.models[state.cfg][p] = el.value; changed();
+  })));
+  refreshStages();
+}
+function refreshStages() {
+  if (stgBox.hidden) return;
+  chain().forEach((s, p) => {
+    document.querySelectorAll(`input[name=m${p}]`).forEach(el => { el.checked = el.value === modelOf(p); });
+    const P = params(p), gain = modelOf(p) === "modulated_gain";
+    const bits = [`τ ${fmt(P.tau * DT_MS, 0)} ms`, `q ${fmt(P.process_noise)}`, `r ${fmt(P.measure_noise)}`];
+    if (p === 0) bits.push(`onset ${fmt(P.onset * DT_MS, 0)} ms`);
+    else bits.push(`coupling ${fmt(P.coupling, 3)}`, `delay ${fmt(P.delay * DT_MS, 0)} ms`);
+    if (gain) bits.push(`g0 ${fmt(P.g0)}`, `g1 ${fmt(P.g1)}`, ...(P.g2 ? [`g2 ${fmt(P.g2)}`] : []), `θ ${fmt(P.threshold)}`);
+    $(`params${p}`).textContent = bits.join("  ");
+    const v = $(`verdict${p}`);
+    if (D.bistable[p]) { v.style.color = stageColour(p); v.textContent = `Bistable at rest: low ${fmt(Math.abs(D.fp[p][0].z) < 0.05 ? 0 : D.fp[p][0].z, 1)}, high ${fmt(D.fp[p][2].z, 1)}`; }
+    else { v.style.color = "var(--muted)"; v.textContent = D.colourBy[p] !== null ? `One stable state; follows stage ${D.colourBy[p] + 1}` : "One stable state"; }
+    drawDrift(p);
+  });
+}
+function drawDrift(p) {
+  const cv = $(`drift${p}`), g = cv.getContext("2d"), W = cv.width, H = cv.height, P = params(p);
+  const F = restDrift(P, modelOf(p) === "modulated_gain"), roots = D.fp[p];
+  const zHi = Math.max(5, ...roots.map(r => r.z + 1.5)), zLo = -1.5;
+  let fMax = 0; for (let i = 0; i <= 200; i++) fMax = Math.max(fMax, Math.abs(F(zLo + (zHi - zLo) * i / 200)));
+  const X = z => 10 + (W - 20) * (z - zLo) / (zHi - zLo), Y = f => H / 2 - (H / 2 - 12) * f / (fMax || 1);
+  g.clearRect(0, 0, W, H);
+  g.strokeStyle = "#31405c"; g.lineWidth = 2; g.beginPath(); g.moveTo(8, H / 2); g.lineTo(W - 8, H / 2); g.stroke();
+  g.strokeStyle = stageColour(p); g.lineWidth = 3; g.beginPath();
+  for (let i = 0; i <= 200; i++) { const z = zLo + (zHi - zLo) * i / 200; i ? g.lineTo(X(z), Y(F(z))) : g.moveTo(X(z), Y(F(z))); }
+  g.stroke();
+  for (const r of roots) {
+    g.beginPath(); g.arc(X(r.z), H / 2, 7, 0, 6.283);
+    if (r.stable) { g.fillStyle = "#e9edf5"; g.fill(); } else { g.fillStyle = "#111a28"; g.fill(); g.strokeStyle = "#e9edf5"; g.lineWidth = 2.5; g.stroke(); }
+  }
+  g.fillStyle = "#8f9bb3"; g.font = "20px 'IBM Plex Mono', monospace"; g.fillText("dz/dt", 12, 22); g.fillText("z →", W - 58, H - 10);
+}
+
+// ================================================================ trajectories
+const plot = $("plot"), ctx = plot.getContext("2d");
+const PAD = { l: 34, r: 64, t: 6, b: 22 };
+function niceStep(span, n) { const raw = span / n, p = 10 ** Math.floor(Math.log10(raw)), m = raw / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; }
+function drawPlot() {
+  const dpr = window.devicePixelRatio || 1, W = plot.clientWidth, H = plot.clientHeight;
+  if (plot.width !== Math.round(W * dpr) || plot.height !== Math.round(H * dpr)) { plot.width = Math.round(W * dpr); plot.height = Math.round(H * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const st = chain(), rowH = (H - PAD.t - PAD.b) / st.length, right = W - PAD.r;
+  const X = i => PAD.l + (W - PAD.l - PAD.r) * i / (N - 1);
+  ctx.font = "11px 'IBM Plex Mono', monospace"; ctx.textBaseline = "middle";
+  st.forEach((s, p) => {
+    const [Y0, Y1] = D.range[p], top = PAD.t + p * rowH, P = params(p);
+    const Y = v => top + rowH - 6 - (rowH - 12) * (Math.min(Y1, Math.max(Y0, v)) - Y0) / (Y1 - Y0);
+    const col = stageColour(p), by = D.colourBy[p];
+    ctx.fillStyle = "rgba(255,255,255,0.025)"; ctx.fillRect(PAD.l, top + 2, W - PAD.l - PAD.r, rowH - 4);
+    ctx.strokeStyle = "#31405c"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(PAD.l, Y(0)); ctx.lineTo(right, Y(0)); ctx.stroke();
+    ctx.textAlign = "right"; ctx.fillStyle = "#8f9bb3";
+    const step = niceStep(Y1 - Y0, rowH > 140 ? 4 : 3);
+    for (let v = Math.ceil(Y0 / step) * step; v < Y1; v += step) if (v > Y0 + step * 0.3) ctx.fillText(+v.toFixed(6), PAD.l - 6, Y(v));
+    if (D.bistable[p]) {                                 // stable and unstable states at rest
+      const [lo, un, hi] = D.fp[p];
+      ctx.font = "10px 'IBM Plex Mono', monospace"; ctx.textAlign = "left";
+      for (const [name, v, c] of [["high (at rest)", hi.z, col], ["unstable (at rest)", un.z, "#8f9bb3"], ["low (at rest)", lo.z, LOW]]) {
+        if (v > Y1) continue;
+        ctx.setLineDash(name.startsWith("unstable") ? [2, 4] : [7, 5]); ctx.strokeStyle = c; ctx.globalAlpha = 0.8;
+        ctx.beginPath(); ctx.moveTo(PAD.l, Y(v)); ctx.lineTo(right, Y(v)); ctx.stroke();
+        ctx.fillStyle = c; ctx.fillText(name, PAD.l + 6, Y(v) + (name.startsWith("low") ? 9 : -7));
+      }
+      ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.font = "11px 'IBM Plex Mono', monospace";
+    }
+    if (p === 0) {                                       // stimulus input of stage 1 (shape only)
+      const A = stimAmp(state.stim) / SPEC.stimulus.max_amp;
+      ctx.fillStyle = "rgba(233,237,245,0.16)"; ctx.beginPath(); ctx.moveTo(X(0), Y(Y0));
+      for (let i = 0; i < N; i++) ctx.lineTo(X(i), Y(Y0 + 0.28 * (Y1 - Y0) * A * bump(i, P.onset, P.scale)));
+      ctx.lineTo(X(N - 1), Y(Y0)); ctx.fill();
+    }
+    const line = (zs, upTo, alpha, width, colour = col) => {
+      ctx.globalAlpha = alpha; ctx.strokeStyle = colour; ctx.lineWidth = width; ctx.beginPath();
+      const last = Math.min(N - 1, Math.floor(upTo));
+      for (let i = 0; i <= last; i++) i ? ctx.lineTo(X(i), Y(zs[i])) : ctx.moveTo(X(i), Y(zs[i]));
+      if (upTo < N - 1) ctx.lineTo(X(upTo), Y(lerpZ(zs, upTo)));
+      ctx.stroke(); ctx.globalAlpha = 1;
+    };
+    // other trials at the same settings, coloured by the end state of the nearest bistable stage at or above
+    for (const fz of fan) line(fz[p], N - 1, by !== null ? 0.3 : 0.13, 1, by !== null && !endsHigh(fz, by) ? LOW : col);
+    if (by !== null) {                                   // where the trials end: histogram on the right
+      const nb = 23, bw = (Y1 - Y0) / nb, tot = new Array(nb).fill(0), hiBins = new Array(nb).fill(0);
+      fan.forEach(fz => {
+        const b = Math.min(nb - 1, Math.max(0, Math.floor((endValue(fz[p]) - Y0) / bw)));
+        tot[b]++; if (endsHigh(fz, by)) hiBins[b]++;
+      });
+      const most = Math.max(1, ...tot);
+      tot.forEach((n, b) => {
+        if (!n) return;
+        const v = Y0 + (b + 0.5) * bw, y0 = Y(v + bw / 2) + 0.5, hgt = Y(v - bw / 2) - Y(v + bw / 2) - 1, len = (PAD.r - 12) * n / most;
+        ctx.globalAlpha = 0.85; ctx.fillStyle = LOW; ctx.fillRect(right + 6, y0, len, hgt);
+        ctx.fillStyle = col; ctx.fillRect(right + 6, y0, len * hiBins[b] / n, hgt);
+      });
+      ctx.globalAlpha = 1; ctx.fillStyle = "#8f9bb3"; ctx.textAlign = "center";
+      ctx.fillText("end", right + PAD.r / 2, top + 13);
+    }
+    line(trial.z[p], N - 1, 0.35, 1.5, "#e9edf5");
+    line(trial.z[p], state.t, 1, 2.6, by !== null ? "#ffffff" : col);
+    ctx.fillStyle = "#e9edf5"; ctx.globalAlpha = 0.75;   // noisy readout, up to the playhead
+    const r = P.measure_noise * state.mn;
+    for (let i = 0; i <= Math.floor(state.t); i++) ctx.fillRect(X(i) - 1.1, Y(trial.z[p][i] + r * trial.eta[p][i]) - 1.1, 2.2, 2.2);
+    ctx.globalAlpha = 1; ctx.textAlign = "left"; ctx.fillStyle = col;
+    ctx.font = "600 12px 'Instrument Sans', sans-serif";
+    ctx.fillText(stageTitle(p, true), PAD.l + 8, top + 13);
+    ctx.font = "11px 'IBM Plex Mono', monospace"; ctx.fillStyle = "#8f9bb3";
+    ctx.fillText(p ? `driven by stage ${p}, ${Math.round(P.delay * DT_MS)} ms later` : "driven by the stimulus (grey)", PAD.l + 8, top + 28);
+    if (by !== null) {
+      const on = endsHigh(trial.z, by); ctx.textAlign = "right"; ctx.fillStyle = on ? "#ffffff" : LOW;
+      ctx.fillText(by === p ? `this trial (white) ends ${on ? "HIGH" : "LOW"}` : `colour: end state of stage ${by + 1}`, right - 8, top + 13);
+    }
+  });
+  const bottom = H - PAD.b, t0ms = -T0 * DT_MS, t1ms = (N - 1 - T0) * DT_MS, step = niceStep(t1ms - t0ms, 6);
+  ctx.textAlign = "center"; ctx.fillStyle = "#8f9bb3";
+  for (let ms = Math.ceil(t0ms / step) * step; ms <= t1ms - step * 0.4; ms += step) ctx.fillText(Math.round(ms), X(T0 + ms / DT_MS), bottom + 11);
+  ctx.textAlign = "left"; ctx.fillText("ms", W - PAD.r + 6, bottom + 11);
+  ctx.setLineDash([3, 4]); ctx.strokeStyle = "#5b6b8c"; ctx.beginPath(); ctx.moveTo(X(T0), PAD.t); ctx.lineTo(X(T0), bottom); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = "#e9edf5"; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(X(state.t), PAD.t); ctx.lineTo(X(state.t), bottom); ctx.stroke();
+}
+function scrubFromPlot(e) {
+  const r = plot.getBoundingClientRect(), f = (e.clientX - r.left - PAD.l) / (r.width - PAD.l - PAD.r);
+  state.t = Math.min(N - 1, Math.max(0, f * (N - 1))); dirty = true;
+}
+plot.addEventListener("pointerdown", e => { state.scrubbing = true; plot.setPointerCapture(e.pointerId); scrubFromPlot(e); });
+plot.addEventListener("pointermove", e => { if (state.scrubbing) scrubFromPlot(e); });
+plot.addEventListener("pointerup", () => { state.scrubbing = false; });
+plot.addEventListener("pointercancel", () => { state.scrubbing = false; });
+
+// ================================================================ controls
+function setPlaying(on) { state.playing = on; $("playBtn").textContent = on ? "Pause" : "Play"; $("playBtn").setAttribute("aria-pressed", on); }
+$("playBtn").addEventListener("click", () => setPlaying(!state.playing));
+$("newBtn").addEventListener("click", () => { nextTrial(); state.t = 0; });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") { setPatterns(false); setStages(false); }
+  if (e.code === "Space" && !/^(BUTTON|INPUT)$/.test(e.target.tagName)) { e.preventDefault(); setPlaying(!state.playing); }
+});
+$("time").max = N - 1;
+$("time").addEventListener("input", e => { state.t = +e.target.value; dirty = true; });
+$("time").addEventListener("pointerdown", () => { state.scrubbing = true; });
+window.addEventListener("pointerup", () => { state.scrubbing = false; });
+const radio = (name, fn) => document.querySelectorAll(`input[name=${name}]`).forEach(el => el.addEventListener("change", () => fn(el.value)));
+$("kSeg").innerHTML = SPEC.configs.map((c, i) => `<input type="radio" name="K" id="k${i}" value="${i}" ${i === state.cfg ? "checked" : ""}><label for="k${i}">${c.label}</label>`).join("");
+radio("K", v => { state.cfg = +v; changed(); });
+radio("loop", v => { state.loop = v; });
+radio("speed", v => { state.speed = +v; });
+$("stimName").textContent = SPEC.stimulus.label || "Stimulus strength";
+const levels = () => { const P = params(0); return (SPEC.stimulus.levels || []).map((lab, i) => ({ label: lab, s: (P[`amp${i + 1}`] || 0) / SPEC.stimulus.max_amp })); };
+function showStim() {
+  const A = stimAmp(state.stim), near = levels().find(l => Math.abs(l.s - state.stim) < 0.006);
+  $("stimOut").textContent = state.stim === 0 ? "0 (no stimulus)" : (SPEC.stimulus.levels ? `${A.toFixed(2)}${near ? " · " + near.label : ""}` : state.stim.toFixed(2));
+}
+$("stim").addEventListener("input", e => { state.stim = +e.target.value; showStim(); restart(true); });
+$("pn").addEventListener("input", e => { state.pn = +e.target.value; $("pnOut").textContent = state.pn.toFixed(1) + "×"; restart(true); });
+$("mn").addEventListener("input", e => { state.mn = +e.target.value; $("mnOut").textContent = state.mn.toFixed(1) + "×"; dirty = true; });
+$("pnOut").textContent = "1.0×"; $("mnOut").textContent = "1.0×";
+const at = s => `calc(8px + (100% - 16px) * ${s})`;
+const stimValue = s => (SPEC.stimulus.levels ? stimAmp(s) : s).toFixed(2);      // amplitude with fitted levels, else strength
+function markTicks() {
+  $("levelTicks").innerHTML = levels().filter(l => l.s <= 1).map(l => `<div class="tick" style="left:${at(l.s)}"><i></i><span>${l.label}</span></div>`).join("");
+  $("levelTicks").style.display = levels().length ? "" : "none";
+  const ticks = D.switching.map((s, p) => (s === null ? null : { s, p })).filter(Boolean);
+  let rows = [];
+  $("switchTicks").innerHTML = ticks.map(t => {
+    let row = 0; while (rows.some(r => r.row === row && Math.abs(r.s - t.s) < 0.24)) row++;
+    rows.push({ row, s: t.s });
+    const col = stageColour(t.p);
+    return `<div class="tick" style="left:${at(t.s)};top:0;color:${col}" title="Above this strength, stage ${t.p + 1} ends high even without process noise">`
+      + `<i style="background:${col};height:${16 + row * 14}px"></i><span>stage ${t.p + 1}: ${stimValue(t.s)}</span></div>`;
+  }).join("");
+  $("switchTicks").parentElement.style.paddingBottom = ticks.length ? `${22 + 14 * Math.max(0, ...rows.map(r => r.row))}px` : "4px";
+}
+function legend() {
+  $("legend").innerHTML = chain().map((s, p) => `<span>Stage ${p + 1}${s.region ? " &middot; " + s.region : ""}<i class="sw" style="background:${stageColour(p)}"></i></span>`).join("")
+    + `<span class="bar"><b>&minus;</b><i></i><b>+</b></span>`;
+}
+function notes() {
+  const bi = D.bistable.map((b, p) => (b ? p : null)).filter(p => p !== null);
+  const inherited = chain().map((_, p) => (!D.bistable[p] && D.colourBy[p] !== null ? p : null)).filter(p => p !== null);
+  let txt;
+  if (!bi.length) txt = "No stage is bistable here: trials spread around one path and never split. Open “Show stages” and choose modulated gain to see a bifurcation.";
+  else {
+    txt = `${bi.map(p => `Stage ${p + 1}`).join(" and ")} ${bi.length > 1 ? "are" : "is"} bistable: each trial ends in its low or high state, never in between.`;
+    if (inherited.length) txt += ` ${inherited.map(p => `Stage ${p + 1}`).join(" and ")} ${inherited.length > 1 ? "have" : "has"} one stable state: ${inherited.length > 1 ? "their" : "its"} two groups of trials are inherited from upstream.`;
+  }
+  $("plotNote").textContent = txt + " Bold line: this trial. Dots: its noisy readout. Faint lines: other trials.";
+  const sw = D.switching.map((v, p) => (v === null ? null : `stage ${p + 1}`)).filter(Boolean);
+  $("tally").textContent = (sw.length ? "Coloured ticks under the stimulus scale: switching thresholds (noise-free switch to high). " : "") + bi.map(p => {
+    const n = fan.filter(z => endsHigh(z, p)).length;
+    return `Stage ${p + 1}: ${n} of ${fan.length} trials end high (${Math.round(100 * n / fan.length)} %)`;
+  }).join(" · ");
+}
+function changed() {                                     // configuration or model choice changed
+  derive(); restart(true); legend(); markTicks(); showStim();
+  if (!patBox.hidden) describePatterns();
+  if (!stgBox.hidden) buildStages();
+}
+
+// ================================================================ loop
+let dirty = true, lastStamp = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - lastStamp) / 1000); lastStamp = now;
+  if (state.playing && !state.scrubbing) {
+    state.t += dt * 24 * state.speed * (10 / DT_MS);   // about 240 ms of epoch per second at 1x
+    if (state.t >= N - 1) { state.t = 0; if (state.loop === "new") nextTrial(); }
+    dirty = true;
+  }
+  if (state.spin) orbit.theta += dt * 0.35;
+  if (dirty) {
+    const sample = Math.floor(state.t), rMean = chain().reduce((s, _, p) => s + params(p).measure_noise, 0) / D.K;
+    paint(head, chain().map((s, p) => [s.pattern, lerpZ(trial.z[p], state.t) / D.zref[p]]), trial.seed * 1000 + sample, state.mn * rMean);
+    drawPlot(); notes();
+    $("time").value = state.t;
+    $("tLabel").textContent = Math.round((state.t - T0) * DT_MS) + " ms";
+    dirty = false;
+  }
+  placeCamera(main.camera); main.renderer.render(main.scene, main.camera);
+  if (!patBox.hidden) renderPatterns();
+  requestAnimationFrame(frame);
+}
+
+// start: "auto" stimulus = just above the first switching threshold, else the strongest fitted level
+derive();
+{ const d = SPEC.stimulus.default;
+  if (typeof d === "number") state.stim = d;
+  else { const s = D.switching.find(v => v !== null); const lv = levels(); state.stim = s != null ? Math.min(1, s + 0.03) : (lv.length ? Math.max(...lv.map(l => l.s)) : 0.7); }
+  $("stim").value = state.stim; }
+if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) setPlaying(false);
+fit(main, $("view")); legend(); markTicks(); showStim(); restart(false);
+if (!state.playing) state.t = Math.round(N * 0.45);
+window.viewer = { state, simulate, derive: () => D, changed, params, nextTrial, setPatterns, setStages,
+                  endsHigh, trial: () => trial, setT: t => { state.t = t; dirty = true; } };
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

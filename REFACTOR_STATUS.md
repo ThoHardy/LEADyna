@@ -1,6 +1,6 @@
 # LEADyna refactor — status & resume guide
 
-*As of 2026-11-16 (Phase 3b complete; fast engine; stationary baseline init; coupled stages added). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
+*As of 2026-11-17 (Phase 3b complete; fast engine; stationary baseline init; coupled stages + 3-D viewer added). Keep this file in the repo (e.g. `docs/REFACTOR_STATUS.md`) and update the checkboxes as you go. It, plus `ROADMAP.md`, is what a future session reads to pick up where we left off.*
 
 ## What this is
 
@@ -59,6 +59,7 @@ Turning the prototype `ThoHardy/LEAD` into **LEADyna** — a pip-installable, mo
   - Faster than the standalone v1 with the same results: pattern search ×4–5 (smoothing done once per step, BLAS covariances, no permutations after the first non-significant step), starting points and delay grid fitted in parallel threads, first-pass stage fits shared across K in `evaluate_K`.
   - Left out on purpose (still in the SOUNDLEAD project code): the `K_r2` rule (worst rule in the benchmark), the box input kernel (never benchmarked), the fixed pattern window, pattern refinement.
   - Tests: 5 fast + 1 slow (`pytest -m slow tests/test_coupled.py`, two-stage recovery).
+  - **3-D viewer** (2026-11-17): `leadyna.coupled_viewer` (numpy only, no JAX). `export_html(fit or {K: fit}, path, info)` / `CoupledLEAD.export_html` write one standalone HTML page (template + fsaverage5 surface shipped in `src/leadyna/_viewer/`, three.js r128 from cdnjs): patterns as scalp topographies from the montage (or `cortex_patterns` on fsaverage5), trials simulated in the page from the fitted parameters, both fitted models of every stage selectable, switching thresholds of bistable stages marked. `export_demo` writes the illustrative demo (invented cortical regions, presets "Stage 2 bistable", "Both bistable", ...). The page's noise-free trajectories match the `coupled.py` equations (`_gamma_bump`, `_shift`) to 6e-7 (float32), checked once in a headless browser; tests check the spec and the standalone file, not the rendering.
   - **Open**: not run on real data; strongly overlapping stages (K = 3) not separated; delays over-estimated by ~25 % on infant-like data → parameter recovery per group before comparing groups; summary plot not migrated.
 
 ## Environment (important lesson)

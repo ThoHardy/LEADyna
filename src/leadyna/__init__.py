@@ -31,6 +31,7 @@ _FRONTEND_MODULES = {
     "dataprocess": (".dataprocess", "eeg"),  # deprecated alias for eeg_mne
     "visual": (".visual", "viz"),
     "coupled": (".coupled", "coupled"),
+    "coupled_viewer": (".coupled_viewer", "coupled"),
 }
 _FRONTEND_ATTR = {"decode_latent": "eeg_mne", "STG": "eeg_mne", "epochs_to_array": "eeg_mne",
                   "colormap": "visual", "CoupledLEAD": "coupled"}
@@ -71,6 +72,7 @@ __all__ = [
     "colormap",
     "CoupledLEAD",
     "coupled",
+    "coupled_viewer",
     "datasets",
     "dataprocess",
     "eeg_mne",
