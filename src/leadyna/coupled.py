@@ -46,9 +46,9 @@ SHARPNESS = 5.0   # sigmoid sharpness of the modulated-gain stage, in rest-SD un
 MODELS = ("linear", "modulated_gain")
 DEFAULT_BOUNDS = dict(
     tau=(1.5, 150.0), process_noise=(0.01, 3.0), measure_noise=(0.01, 3.0),
-    onset=(0.0, 80.0), scale=(0.5, 30.0), amp=(0.0, 5.0), coupling=(0.0, 3.0),
+    onset=(0.0, 50.0), scale=(0.5, 20.0), amp=(0.0, 5.0), coupling=(0.0, 3.0),
     delay=(0.0, 60.0), g0=(-2.0, 2.0), g1=(-3.0, 3.0), g2=(-3.0, 3.0),
-    threshold=(-1.0, 5.0), alpha=(-3.0, 3.0))
+    threshold=(0.0, 5.0), alpha=(-3.0, 3.0))
 
 
 def _pmap(fn, items, n_jobs):
